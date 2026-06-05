@@ -212,15 +212,23 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
                 return;
             }
 
+            // Action and trait names are proper nouns in FFXIV. Machine translators often turn
+            // names like "Imperator" into generic words like "Emperor", which is worse than
+            // leaving the original name visible. Item names are still translated because they
+            // are usually descriptive enough to be useful in Mandarin.
+            var preserveTitle = source.Key.Kind != TooltipLookupKind.Item;
+
             var translatedTitle = string.IsNullOrWhiteSpace(source.OriginalTitle)
                 ? string.Empty
-                : await this.TranslateWithServiceAsync(
-                    translator,
-                    source.OriginalTitle,
-                    "en",
-                    targetLanguage,
-                    "TooltipOverlay.Title",
-                    cancellationToken).ConfigureAwait(false);
+                : preserveTitle
+                    ? source.OriginalTitle
+                    : await this.TranslateWithServiceAsync(
+                        translator,
+                        source.OriginalTitle,
+                        "English",
+                        targetLanguage,
+                        "TooltipOverlay.Title",
+                        cancellationToken).ConfigureAwait(false);
 
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -229,7 +237,7 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
                 : await this.TranslateWithServiceAsync(
                     translator,
                     source.OriginalBody,
-                    "en",
+                    "English",
                     targetLanguage,
                     "TooltipOverlay.Body",
                     cancellationToken).ConfigureAwait(false);
@@ -528,4 +536,3 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
         }
     }
 }
-

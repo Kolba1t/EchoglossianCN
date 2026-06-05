@@ -17,7 +17,7 @@ public partial class Echoglossian
             GameGuiInterface,
             PluginInterface,
             PluginLog,
-            () => this.LangToTranslateTo,
+            () => LangDict[LanguageInt].Code,
             () => TranslationService);
 
         this.cnTooltipOverlayRuntime.Start();
