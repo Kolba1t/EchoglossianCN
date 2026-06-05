@@ -848,6 +848,11 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
             this.DrawWrapped(payload.OriginalBody, fallback: string.Empty, strong: false);
         }
 
+        if (this.ReadConfigBool("TooltipOverlayDebug", TooltipOverlayConfigDefaults.TooltipOverlayDebug))
+        {
+            this.DrawDebugInfo(payload);
+        }
+
         // Keep the original mouse-following behavior. Once ImGui has measured the
         // auto-resized window, push only the overflowing part back into the game viewport.
         var measuredSize = ImGui.GetWindowSize();
@@ -894,6 +899,29 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
         desired.X = Math.Clamp(desired.X, min.X, max.X);
         desired.Y = Math.Clamp(desired.Y, min.Y, max.Y);
         return desired;
+    }
+
+    private void DrawDebugInfo(TooltipPayload payload)
+    {
+        ImGui.Separator();
+        ImGui.TextDisabled("CN Tooltip Debug");
+
+        var target = this.targetLanguageCodeProvider();
+        var cacheState = payload.IsPending ? "pending" : "cached/displayed";
+        var translatedTitleHasCjk = ContainsCjk(payload.TranslatedTitle) ? "yes" : "no";
+        var translatedBodyHasCjk = ContainsCjk(payload.TranslatedBody) ? "yes" : "no";
+
+        ImGui.TextDisabled($"Key: {payload.Key.CacheKey}");
+        ImGui.TextDisabled($"Target: {target} | State: {cacheState}");
+        ImGui.TextDisabled($"Original title/body chars: {payload.OriginalTitle?.Length ?? 0}/{payload.OriginalBody?.Length ?? 0}");
+        ImGui.TextDisabled($"Translated title/body chars: {payload.TranslatedTitle?.Length ?? 0}/{payload.TranslatedBody?.Length ?? 0}");
+        ImGui.TextDisabled($"CJK in title/body: {translatedTitleHasCjk}/{translatedBodyHasCjk}");
+
+        var providerDebug = this.textProvider.GetDebugSummary(payload.Key);
+        if (!string.IsNullOrWhiteSpace(providerDebug))
+        {
+            ImGui.TextDisabled(providerDebug);
+        }
     }
 
     private void DrawWrapped(string text, string fallback, bool strong)

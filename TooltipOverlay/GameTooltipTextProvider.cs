@@ -17,6 +17,18 @@ internal sealed class GameTooltipTextProvider
     private readonly IDataManager dataManager;
     private readonly IPluginLog log;
     private readonly NativeTooltipTextReader nativeTooltipReader;
+    private string lastDebugSummary = "Tooltip provider has not run yet.";
+    private string lastDebugCacheKey = string.Empty;
+
+    public string GetDebugSummary(TooltipLookupKey key)
+    {
+        if (!string.IsNullOrWhiteSpace(this.lastDebugCacheKey) && this.lastDebugCacheKey != key.CacheKey)
+        {
+            return $"Provider debug cache currently belongs to {this.lastDebugCacheKey}, not {key.CacheKey}.";
+        }
+
+        return this.lastDebugSummary;
+    }
 
     public GameTooltipTextProvider(IDataManager dataManager, IGameGui gameGui, IPluginLog log)
     {
@@ -29,8 +41,15 @@ internal sealed class GameTooltipTextProvider
     {
         if (key.IsNone)
         {
+            this.lastDebugCacheKey = string.Empty;
+            this.lastDebugSummary = "No hover key.";
             return null;
         }
+
+        var debug = new StringBuilder();
+        this.lastDebugCacheKey = key.CacheKey;
+        debug.AppendLine($"Source key: {key.CacheKey}");
+        debug.AppendLine($"Kind/detail: {key.Kind}/{key.DetailKind}");
 
         try
         {
@@ -45,32 +64,68 @@ internal sealed class GameTooltipTextProvider
                 _ => null,
             };
 
+            if (sheetPayload == null)
+            {
+                debug.AppendLine("Sheet payload: null");
+            }
+            else
+            {
+                debug.AppendLine($"Sheet payload: title={sheetPayload.OriginalTitle.Length} body={sheetPayload.OriginalBody.Length} lines={CountLines(sheetPayload.OriginalBody)} score={TextRichnessScore(sheetPayload.OriginalBody)}");
+                debug.AppendLine($"Sheet has potency/type: {ContainsPotencyOrType(sheetPayload.OriginalBody)}");
+                debug.AppendLine("Sheet body preview:");
+                debug.AppendLine(PreviewForDebug(sheetPayload.OriginalBody));
+            }
+
             // Prefer the actual rendered tooltip when available. It contains client-resolved
             // lines such as ability type and potency that are often missing from Lumina sheets.
             var nativePayload = this.nativeTooltipReader.TryBuildPayloadFromVisibleTooltip(key, sheetPayload?.OriginalTitle);
+            debug.AppendLine("Native reader:");
+            debug.AppendLine(this.nativeTooltipReader.LastDebugSummary);
+
             if (nativePayload != null)
             {
+                debug.AppendLine($"Native payload: title={nativePayload.OriginalTitle.Length} body={nativePayload.OriginalBody.Length} lines={CountLines(nativePayload.OriginalBody)} score={TextRichnessScore(nativePayload.OriginalBody)}");
+                debug.AppendLine($"Native has potency/type: {ContainsPotencyOrType(nativePayload.OriginalBody)}");
+                debug.AppendLine("Native body preview:");
+                debug.AppendLine(PreviewForDebug(nativePayload.OriginalBody));
+
                 if (sheetPayload == null)
                 {
+                    debug.AppendLine("Selected source: NativeTooltip only");
+                    this.lastDebugSummary = debug.ToString().Trim();
                     return nativePayload;
                 }
 
                 var nativeScore = TextRichnessScore(nativePayload.OriginalBody);
                 var sheetScore = TextRichnessScore(sheetPayload.OriginalBody);
+                debug.AppendLine($"Source score comparison: native={nativeScore}, sheet={sheetScore}, threshold={Math.Max(40, sheetScore)}");
                 if (nativeScore >= Math.Max(40, sheetScore))
                 {
-                    return nativePayload with
+                    debug.AppendLine("Selected source: NativeTooltip + sheet supplement");
+                    var selected = nativePayload with
                     {
                         OriginalTitle = string.IsNullOrWhiteSpace(nativePayload.OriginalTitle) ? sheetPayload.OriginalTitle : nativePayload.OriginalTitle,
                         OriginalBody = MergeTooltipSections(nativePayload.OriginalBody, this.ExtractUsefulSupplementOnly(sheetPayload.OriginalBody)),
                     };
+                    this.lastDebugSummary = debug.ToString().Trim();
+                    return selected;
                 }
+
+                debug.AppendLine("Selected source: LuminaFallback because native was not rich enough");
+            }
+            else
+            {
+                debug.AppendLine("Native payload: null");
+                debug.AppendLine("Selected source: LuminaFallback");
             }
 
+            this.lastDebugSummary = debug.ToString().Trim();
             return sheetPayload;
         }
         catch (Exception ex)
         {
+            debug.AppendLine($"Build exception: {ex.GetType().Name}: {ex.Message}");
+            this.lastDebugSummary = debug.ToString().Trim();
             this.log.Debug($"[CN Tooltip Overlay] Failed to build source payload for {key.CacheKey}: {ex}");
             return null;
         }
@@ -155,6 +210,46 @@ internal sealed class GameTooltipTextProvider
         }
 
         return keep.Count == 0 ? string.Empty : "Additional data:\n" + string.Join("\n", keep);
+    }
+
+    private static int CountLines(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return 0;
+        }
+
+        return text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n').Count(l => !string.IsNullOrWhiteSpace(l));
+    }
+
+    private static bool ContainsPotencyOrType(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        return text.Contains("potency", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("weaponskill", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("ability", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("spell", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("trait", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string PreviewForDebug(string text, int maxChars = 600)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return "(empty)";
+        }
+
+        var normalized = text.Replace("\r\n", "\n").Replace('\r', '\n').Trim();
+        if (normalized.Length <= maxChars)
+        {
+            return normalized;
+        }
+
+        return normalized[..maxChars] + "…";
     }
 
     private TooltipPayload? BuildActionPayload(TooltipLookupKey key)

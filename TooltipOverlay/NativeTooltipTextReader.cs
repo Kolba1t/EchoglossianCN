@@ -43,6 +43,8 @@ internal sealed class NativeTooltipTextReader
     private readonly IGameGui gameGui;
     private readonly IPluginLog log;
 
+    public string LastDebugSummary { get; private set; } = "Native tooltip reader has not run yet.";
+
     public NativeTooltipTextReader(IGameGui gameGui, IPluginLog log)
     {
         this.gameGui = gameGui;
@@ -53,6 +55,7 @@ internal sealed class NativeTooltipTextReader
     {
         if (key.IsNone)
         {
+            this.LastDebugSummary = "Native reader skipped: no key.";
             return null;
         }
 
@@ -69,52 +72,77 @@ internal sealed class NativeTooltipTextReader
 
         if (addonNames.Length == 0)
         {
+            this.LastDebugSummary = $"Native reader skipped: no addon candidates for {key.Kind}.";
             return null;
         }
 
-        var nativeText = this.TryReadFirstVisibleAddonText(addonNames);
+        var nativeRead = this.TryReadFirstVisibleAddonText(addonNames);
+        var nativeText = nativeRead.Text;
+        var debug = new StringBuilder();
+        debug.AppendLine($"Candidates: {string.Join(", ", addonNames)}");
+        debug.AppendLine($"Selected addon: {(string.IsNullOrWhiteSpace(nativeRead.AddonName) ? "(none)" : nativeRead.AddonName)}");
+        debug.AppendLine($"Native chars/lines: {nativeText.Length}/{CountLines(nativeText)}");
+        debug.AppendLine("Addon attempts:");
+        debug.AppendLine(nativeRead.Attempts);
+
         if (string.IsNullOrWhiteSpace(nativeText))
         {
+            debug.AppendLine("Result: no native text captured.");
+            this.LastDebugSummary = debug.ToString().Trim();
             return null;
         }
 
-        var lines = NormalizeNativeLines(nativeText).ToList();
+        var lines = nativeText
+            .Replace("\r\n", "\n")
+            .Replace('\r', '\n')
+            .Split('\n')
+            .Select(l => l.Trim())
+            .Where(l => !string.IsNullOrWhiteSpace(l))
+            .ToList();
+
+        debug.AppendLine("Captured lines preview:");
+        debug.AppendLine(string.Join("\n", lines.Take(16)));
+
         if (lines.Count == 0)
         {
+            debug.AppendLine("Result: native text normalized to zero lines.");
+            this.LastDebugSummary = debug.ToString().Trim();
             return null;
         }
 
         var title = PickTitle(lines, preferredTitle);
-        var bodyLines = new List<string>();
-        var skippedTitle = false;
-        foreach (var line in lines)
-        {
-            if (!skippedTitle && !string.IsNullOrWhiteSpace(title) && SameVisibleText(line, title))
-            {
-                skippedTitle = true;
-                continue;
-            }
-
-            bodyLines.Add(line);
-        }
+        var bodyLines = lines
+            .Where(l => !SameVisibleText(l, title))
+            .ToList();
 
         var body = string.Join("\n", bodyLines).Trim();
+        debug.AppendLine($"Picked title: {title}");
+        debug.AppendLine($"Body chars/lines after title removal: {body.Length}/{CountLines(body)}");
+        debug.AppendLine($"Looks useful: {LooksLikeUsefulTooltip(body)}");
+
         if (string.IsNullOrWhiteSpace(title) && string.IsNullOrWhiteSpace(body))
         {
+            debug.AppendLine("Result: no title/body after parsing.");
+            this.LastDebugSummary = debug.ToString().Trim();
             return null;
         }
 
         // Avoid replacing a decent sheet payload with a tiny or wrong addon scrape.
         if (!LooksLikeUsefulTooltip(body) && body.Length < 40)
         {
+            debug.AppendLine("Result: rejected because native scrape did not look useful.");
+            this.LastDebugSummary = debug.ToString().Trim();
             return null;
         }
 
+        debug.AppendLine("Result: native payload accepted.");
+        this.LastDebugSummary = debug.ToString().Trim();
         return new TooltipPayload(key, title, body, string.Empty, string.Empty);
     }
 
-    private string TryReadFirstVisibleAddonText(IEnumerable<string> addonNames)
+    private NativeReadResult TryReadFirstVisibleAddonText(IEnumerable<string> addonNames)
     {
+        var attempts = new StringBuilder();
         foreach (var addonName in addonNames)
         {
             try
@@ -122,22 +150,25 @@ internal sealed class NativeTooltipTextReader
                 var ptr = this.ResolveAddonPointer(addonName);
                 if (ptr == nint.Zero)
                 {
+                    attempts.AppendLine($"{addonName}: missing/null");
                     continue;
                 }
 
                 var text = this.TryReadAddonTextUnsafe(ptr);
+                attempts.AppendLine($"{addonName}: ptr=0x{ptr.ToInt64():X}, chars={text.Length}, lines={CountLines(text)}");
                 if (!string.IsNullOrWhiteSpace(text))
                 {
-                    return text;
+                    return new NativeReadResult(text, addonName, attempts.ToString().Trim());
                 }
             }
             catch (Exception ex)
             {
+                attempts.AppendLine($"{addonName}: exception {ex.GetType().Name}: {ex.Message}");
                 this.log.Debug($"[CN Tooltip Overlay] Native tooltip scrape failed for {addonName}: {ex.Message}");
             }
         }
 
-        return string.Empty;
+        return new NativeReadResult(string.Empty, string.Empty, attempts.ToString().Trim());
     }
 
     private nint ResolveAddonPointer(string addonName)
@@ -338,6 +369,30 @@ internal sealed class NativeTooltipTextReader
     private static bool SameVisibleText(string a, string b)
     {
         return string.Equals(NormalizeForDedupe(a), NormalizeForDedupe(b), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int CountLines(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return 0;
+        }
+
+        return text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n').Count(l => !string.IsNullOrWhiteSpace(l));
+    }
+
+    private readonly struct NativeReadResult
+    {
+        public NativeReadResult(string text, string addonName, string attempts)
+        {
+            this.Text = text;
+            this.AddonName = addonName;
+            this.Attempts = attempts;
+        }
+
+        public string Text { get; }
+        public string AddonName { get; }
+        public string Attempts { get; }
     }
 
     private static string NormalizeForDedupe(string line)

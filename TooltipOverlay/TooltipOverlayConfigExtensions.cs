@@ -21,4 +21,7 @@ internal static class TooltipOverlayConfigDefaults
     // If Dalamud keeps reporting the last hovered action after the cursor has left it,
     // hide the overlay once the mouse drifts this far from the point where the hover began.
     public const int TooltipOverlayMaxMouseDriftPixels = 96;
+
+    // Debug patch: show source/translation/native scrape diagnostics directly in the overlay.
+    public const bool TooltipOverlayDebug = true;
 }
