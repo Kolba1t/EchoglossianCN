@@ -1,15 +1,29 @@
-﻿{
-  "Name": "Echoglossian",
-  "Author": "lokinmodar",
-  "Contributors": [ "Limiana", "Bluefissure", "Soreenpeong", "samulopez" ],
-  "InternalName": "Echoglossian",
+{
+  "Name": "Echoglossian CN",
+  "Author": "YOUR_GITHUB_USERNAME, based on lokinmodar/Echoglossian",
+  "Contributors": [
+    "Limiana",
+    "Bluefissure",
+    "Soreenpeong",
+    "samulopez"
+  ],
+  "InternalName": "EchoglossianCN",
   "ApplicableVersion": "any",
-  "Description": "Realtime game text translator",
-  "RepoUrl": "https://github.com/lokinmodar/Echoglossian",
-  "Tags": [ "ffxiv", "Dalamud", "plugin", "translation", "UI", "Utility" ],
+  "Description": "Realtime game text translator preset/fork for Mandarin Chinese users on global FFXIV clients.",
+  "RepoUrl": "https://github.com/YOUR_GITHUB_USERNAME/EchoglossianCN",
+  "Tags": [
+    "ffxiv",
+    "Dalamud",
+    "plugin",
+    "translation",
+    "Chinese",
+    "Mandarin",
+    "UI",
+    "Utility"
+  ],
   "Disabled": false,
   "Testing": false,
-  "Punchline": "Dialogue and other in-game text translations? Yes we have!\nKnown Issues at: https://github.com/lokinmodar/Echoglossian/issues/12",
+  "Punchline": "Mandarin-focused fork of Echoglossian for dialogue and in-game text translation.",
   "IsHide": false,
   "IsTestingExclusive": false,
   "LoadPriority": 0,

@@ -1,4 +1,4 @@
-﻿// <copyright file="Config.cs" company="lokinmodar">
+// <copyright file="Config.cs" company="lokinmodar">
 // Copyright (c) lokinmodar. All rights reserved.
 // Licensed under the Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International Public License license.
 // </copyright>
@@ -943,6 +943,23 @@ public class Config : IPluginConfiguration
 
   /// <summary>Translate UI tooltips.</summary>
   [DefaultValue(false)] public bool TranslateTooltips = false;
+    [DefaultValue(true)]
+    public bool TranslateTooltipOverlay = true;
+
+    [DefaultValue(false)]
+    public bool TooltipOverlayShowOriginal = false;
+
+    [DefaultValue(350)]
+    public int TooltipOverlayDelayMs = 350;
+
+    [DefaultValue(560)]
+    public int TooltipOverlayMaxWidth = 560;
+
+    [DefaultValue(1.0f)]
+    public float TooltipOverlayFontScale = 1.0f;
+
+    [DefaultValue(0.96f)]
+    public float TooltipOverlayBgAlpha = 0.96f;
 
   /// <summary>
   ///     Display mode for action and item tooltips managed by the DB-first
@@ -1073,3 +1090,4 @@ public class Config : IPluginConfiguration
   /// </summary>
   [DefaultValue(true)] public bool EnableAsyncTranslation { get; set; } = true;
 }
+

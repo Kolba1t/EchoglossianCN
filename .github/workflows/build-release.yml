@@ -1,0 +1,42 @@
+name: Build Echoglossian CN
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET from global.json
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore Echoglossian.csproj
+
+      - name: Build
+        run: dotnet build Echoglossian.csproj -c Release --no-restore
+
+      - name: Locate build output
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse -Filter "EchoglossianCN*.dll" | Format-Table FullName
+          Get-ChildItem -Recurse -Filter "*.zip" | Format-Table FullName
+
+      # Echoglossian/Dalamud.NET.Sdk may already create a distributable zip depending on project settings.
+      # If not, manually zip the Release output folder that contains the plugin DLL, json manifest, and required assets.
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EchoglossianCN-build
+          path: |
+            **/Release/**/*.zip
+            **/Release/**/EchoglossianCN.dll
+            **/Release/**/Echoglossian.json
+            **/Release/**/Font/**

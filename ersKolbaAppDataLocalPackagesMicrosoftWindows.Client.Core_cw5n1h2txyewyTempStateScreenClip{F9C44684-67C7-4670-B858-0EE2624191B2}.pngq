@@ -1,0 +1,177 @@
+warning: in the working copy of 'Config.cs', LF will be replaced by CRLF the next time Git touches it
+[1mdiff --git a/Config.cs b/Config.cs[m
+[1mindex 89c7905..4460b44 100644[m
+[1m--- a/Config.cs[m
+[1m+++ b/Config.cs[m
+[36m@@ -1,4 +1,4 @@[m
+[31m-﻿// <copyright file="Config.cs" company="lokinmodar">[m
+[32m+[m[32m// <copyright file="Config.cs" company="lokinmodar">[m
+ // Copyright (c) lokinmodar. All rights reserved.[m
+ // Licensed under the Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International Public License license.[m
+ // </copyright>[m
+[36m@@ -943,6 +943,23 @@[m [mpublic class Config : IPluginConfiguration[m
+ [m
+   /// <summary>Translate UI tooltips.</summary>[m
+   [DefaultValue(false)] public bool TranslateTooltips = false;[m
+[32m+[m[32m    [DefaultValue(true)][m
+[32m+[m[32m    public bool TranslateTooltipOverlay = true;[m
+[32m+[m
+[32m+[m[32m    [DefaultValue(false)][m
+[32m+[m[32m    public bool TooltipOverlayShowOriginal = false;[m
+[32m+[m
+[32m+[m[32m    [DefaultValue(350)][m
+[32m+[m[32m    public int TooltipOverlayDelayMs = 350;[m
+[32m+[m
+[32m+[m[32m    [DefaultValue(560)][m
+[32m+[m[32m    public int TooltipOverlayMaxWidth = 560;[m
+[32m+[m
+[32m+[m[32m    [DefaultValue(1.0f)][m
+[32m+[m[32m    public float TooltipOverlayFontScale = 1.0f;[m
+[32m+[m
+[32m+[m[32m    [DefaultValue(0.96f)][m
+[32m+[m[32m    public float TooltipOverlayBgAlpha = 0.96f;[m
+ [m
+   /// <summary>[m
+   ///     Display mode for action and item tooltips managed by the DB-first[m
+[36m@@ -1073,3 +1090,4 @@[m [mpublic class Config : IPluginConfiguration[m
+   /// </summary>[m
+   [DefaultValue(true)] public bool EnableAsyncTranslation { get; set; } = true;[m
+ }[m
+[41m+[m
+[1mdiff --git a/Echoglossian.cs b/Echoglossian.cs[m
+[1mindex 6137089..8fee6b4 100644[m
+[1m--- a/Echoglossian.cs[m
+[1m+++ b/Echoglossian.cs[m
+[36m@@ -27,14 +27,14 @@[m [mpublic partial class Echoglossian : IDalamudPlugin[m
+   /// <summary>[m
+   /// The command used to invoke the plugin config UI.[m
+   /// </summary>[m
+[31m-  private const string SlashCommand = "/eglo";[m
+[32m+[m[32m  private const string SlashCommand = "/eglocn";[m
+ [m
+[31m-  private const string DBManagerWindowCommand = "/eglodbmanager";[m
+[32m+[m[32m  private const string DBManagerWindowCommand = "/eglocndbmanager";[m
+ [m
+ #if DEBUG[m
+[31m-  private const string AddonProbeCommand = "/egloaddonprobe";[m
+[32m+[m[32m  private const string AddonProbeCommand = "/eglocnaddonprobe";[m
+ [m
+[31m-  private const string QuestProbeCommand = "/egloquestprobe";[m
+[32m+[m[32m  private const string QuestProbeCommand = "/eglocnquestprobe";[m
+ #endif[m
+ [m
+   /// <summary>[m
+[36m@@ -307,6 +307,7 @@[m [mpublic partial class Echoglossian : IDalamudPlugin[m
+     UINewFontHandler = new UINewFontHandler(this.configuration);[m
+ [m
+     this.RebuildTranslationServiceSafely();[m
+[32m+[m[32m            this.RegisterCnTooltipOverlayRuntime();[m
+ [m
+     this.queuedTranslationBroker = new QueuedTranslationBroker([m
+         (TransEngines)this.configuration.ChosenTransEngine,[m
+[36m@@ -470,7 +471,8 @@[m [mpublic partial class Echoglossian : IDalamudPlugin[m
+       }[m
+     }[m
+ [m
+[31m-    this.ResetStructuredTooltipUiRuntime();[m
+[32m+[m[32m    this.DisposeCnTooltipOverlayRuntime();[m
+[32m+[m[32m        this.ResetStructuredTooltipUiRuntime();[m
+     this.UnregisterStructuredTooltipLifecycleHandlers();[m
+ [m
+     AddonLifecycle.UnLogAddon("CutSceneSelectString");[m
+[36m@@ -558,3 +560,5 @@[m [mpublic partial class Echoglossian : IDalamudPlugin[m
+ }[m
+ [m
+ [m
+[41m+[m
+[41m+[m
+[1mdiff --git a/Echoglossian.csproj b/Echoglossian.csproj[m
+[1mindex 89411ce..240d803 100644[m
+[1m--- a/Echoglossian.csproj[m
+[1m+++ b/Echoglossian.csproj[m
+[36m@@ -1,4 +1,4 @@[m
+[31m-﻿<Project Sdk="Dalamud.NET.Sdk/15.0.0">[m
+[32m+[m[32m<Project Sdk="Dalamud.NET.Sdk/15.0.0">[m
+   <PropertyGroup Label="MultilingualAppToolkit">[m
+     <MultilingualAppToolkitVersion>4.0</MultilingualAppToolkitVersion>[m
+     <MultilingualFallbackLanguage>en</MultilingualFallbackLanguage>[m
+[36m@@ -10,7 +10,7 @@[m
+   <PropertyGroup>[m
+     <TargetFramework>net10.0-windows</TargetFramework>[m
+     <RuntimeIdentifier>win-x64</RuntimeIdentifier>[m
+[31m-    <AssemblyName>Echoglossian</AssemblyName>[m
+[32m+[m[32m    <AssemblyName>EchoglossianCN</AssemblyName>[m
+     <Platforms>x64</Platforms>[m
+     <Authors>lokinmodar</Authors>[m
+     <NeutralLanguage>en</NeutralLanguage>[m
+[36m@@ -34,13 +34,13 @@[m
+     <Company>lokinmodar</Company>[m
+     <Description>Final Fantasy XIV game text translator</Description>[m
+     <Copyright>lokinmodar - 2021-2026</Copyright>[m
+[31m-    <PackageProjectUrl>https://github.com/lokinmodar/Echoglossian/</PackageProjectUrl>[m
+[32m+[m[32m    <PackageProjectUrl>https://github.com/YOUR_GITHUB_USERNAME/EchoglossianCN</PackageProjectUrl>[m
+     <Nullable>enable</Nullable>[m
+     <ApplicationIcon>minfilia.ico</ApplicationIcon>[m
+     <PackageLicenseExpression>Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International Public License</PackageLicenseExpression>[m
+     <PackageIcon>logo.png</PackageIcon>[m
+     <PackageIconUrl>https://github.com/lokinmodar/Echoglossian/blob/APIv4/images/logo.png?raw=true</PackageIconUrl>[m
+[31m-    <RepositoryUrl>https://github.com/lokinmodar/Echoglossian</RepositoryUrl>[m
+[32m+[m[32m    <RepositoryUrl>https://github.com/YOUR_GITHUB_USERNAME/EchoglossianCN</RepositoryUrl>[m
+     <PackageTags>ffxiv, translation, dll, plugin, XIVLauncher</PackageTags>[m
+     <DocumentationFile>$(OutputPath)$(AssemblyName).xml</DocumentationFile>[m
+     <ImplicitUsings>enable</ImplicitUsings>[m
+[36m@@ -362,3 +362,4 @@[m
+   </ItemGroup>[m
+ [m
+ </Project>[m
+[41m+[m
+[1mdiff --git a/Echoglossian.json b/Echoglossian.json[m
+[1mindex 140a17f..48fb91a 100644[m
+[1m--- a/Echoglossian.json[m
+[1m+++ b/Echoglossian.json[m
+[36m@@ -1,15 +1,29 @@[m
+[31m-﻿{[m
+[31m-  "Name": "Echoglossian",[m
+[31m-  "Author": "lokinmodar",[m
+[31m-  "Contributors": [ "Limiana", "Bluefissure", "Soreenpeong", "samulopez" ],[m
+[31m-  "InternalName": "Echoglossian",[m
+[32m+[m[32m{[m
+[32m+[m[32m  "Name": "Echoglossian CN",[m
+[32m+[m[32m  "Author": "YOUR_GITHUB_USERNAME, based on lokinmodar/Echoglossian",[m
+[32m+[m[32m  "Contributors": [[m
+[32m+[m[32m    "Limiana",[m
+[32m+[m[32m    "Bluefissure",[m
+[32m+[m[32m    "Soreenpeong",[m
+[32m+[m[32m    "samulopez"[m
+[32m+[m[32m  ],[m
+[32m+[m[32m  "InternalName": "EchoglossianCN",[m
+   "ApplicableVersion": "any",[m
+[31m-  "Description": "Realtime game text translator",[m
+[31m-  "RepoUrl": "https://github.com/lokinmodar/Echoglossian",[m
+[31m-  "Tags": [ "ffxiv", "Dalamud", "plugin", "translation", "UI", "Utility" ],[m
+[32m+[m[32m  "Description": "Realtime game text translator preset/fork for Mandarin Chinese users on global FFXIV clients.",[m
+[32m+[m[32m  "RepoUrl": "https://github.com/YOUR_GITHUB_USERNAME/EchoglossianCN",[m
+[32m+[m[32m  "Tags": [[m
+[32m+[m[32m    "ffxiv",[m
+[32m+[m[32m    "Dalamud",[m
+[32m+[m[32m    "plugin",[m
+[32m+[m[32m    "translation",[m
+[32m+[m[32m    "Chinese",[m
+[32m+[m[32m    "Mandarin",[m
+[32m+[m[32m    "UI",[m
+[32m+[m[32m    "Utility"[m
+[32m+[m[32m  ],[m
+   "Disabled": false,[m
+   "Testing": false,[m
+[31m-  "Punchline": "Dialogue and other in-game text translations? Yes we have!\nKnown Issues at: https://github.com/lokinmodar/Echoglossian/issues/12",[m
+[32m+[m[32m  "Punchline": "Mandarin-focused fork of Echoglossian for dialogue and in-game text translation.",[m
+   "IsHide": false,[m
+   "IsTestingExclusive": false,[m
+   "LoadPriority": 0,[m
+[36m@@ -18,4 +32,4 @@[m
+   ],[m
+   "DevSupportState": "ACTIVE",[m
+   "IconUrl": "https://raw.githubusercontent.com/lokinmodar/Echoglossian/APIv4/images/icon.png"[m
+[31m-}[m
+\ No newline at end of file[m
+[32m+[m[32m}[m

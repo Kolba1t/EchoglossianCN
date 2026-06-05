@@ -27,14 +27,14 @@ public partial class Echoglossian : IDalamudPlugin
   /// <summary>
   /// The command used to invoke the plugin config UI.
   /// </summary>
-  private const string SlashCommand = "/eglo";
+  private const string SlashCommand = "/eglocn";
 
-  private const string DBManagerWindowCommand = "/eglodbmanager";
+  private const string DBManagerWindowCommand = "/eglocndbmanager";
 
 #if DEBUG
-  private const string AddonProbeCommand = "/egloaddonprobe";
+  private const string AddonProbeCommand = "/eglocnaddonprobe";
 
-  private const string QuestProbeCommand = "/egloquestprobe";
+  private const string QuestProbeCommand = "/eglocnquestprobe";
 #endif
 
   /// <summary>
@@ -307,6 +307,7 @@ public partial class Echoglossian : IDalamudPlugin
     UINewFontHandler = new UINewFontHandler(this.configuration);
 
     this.RebuildTranslationServiceSafely();
+            this.RegisterCnTooltipOverlayRuntime();
 
     this.queuedTranslationBroker = new QueuedTranslationBroker(
         (TransEngines)this.configuration.ChosenTransEngine,
@@ -470,7 +471,8 @@ public partial class Echoglossian : IDalamudPlugin
       }
     }
 
-    this.ResetStructuredTooltipUiRuntime();
+    this.DisposeCnTooltipOverlayRuntime();
+        this.ResetStructuredTooltipUiRuntime();
     this.UnregisterStructuredTooltipLifecycleHandlers();
 
     AddonLifecycle.UnLogAddon("CutSceneSelectString");
@@ -556,5 +558,7 @@ public partial class Echoglossian : IDalamudPlugin
   }
 
 }
+
+
 
 
