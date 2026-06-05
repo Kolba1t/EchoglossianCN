@@ -323,7 +323,7 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
             var bodyForTranslation = PrepareTextForTranslation(source.OriginalBody);
             var translatedBody = string.IsNullOrWhiteSpace(bodyForTranslation)
                 ? string.Empty
-                : await this.TranslateBodyRobustAsync(
+                : await this.TranslateStructuredTooltipBodyAsync(
                     translator,
                     bodyForTranslation,
                     targetLanguage,
@@ -373,6 +373,297 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
             {
                 this.pendingCacheKey = null;
             }
+        }
+    }
+
+
+    private async Task<string> TranslateStructuredTooltipBodyAsync(
+        object translator,
+        string bodyForTranslation,
+        string targetLanguage,
+        CancellationToken cancellationToken)
+    {
+        var sections = TooltipBodySections.Parse(bodyForTranslation);
+        if (!sections.HasDescription)
+        {
+            return await this.TranslateBodyRobustAsync(
+                translator,
+                bodyForTranslation,
+                targetLanguage,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        var output = new List<string>();
+        foreach (var line in sections.HeaderLines)
+        {
+            var localized = LocalizeSupplementLine(line) ?? line.Trim();
+            if (!string.IsNullOrWhiteSpace(localized))
+            {
+                output.Add(localized);
+            }
+        }
+
+        if (sections.DescriptionLines.Count > 0)
+        {
+            if (output.Count > 0)
+            {
+                output.Add(string.Empty);
+            }
+
+            output.Add("说明：");
+            var descriptionSource = NormalizeDescriptionBlockForTranslation(string.Join("\n", sections.DescriptionLines));
+            var translatedDescription = await this.TranslateDescriptionBlockAsync(
+                translator,
+                descriptionSource,
+                targetLanguage,
+                cancellationToken).ConfigureAwait(false);
+
+            translatedDescription = CleanTranslatedOutput(translatedDescription);
+            if (string.IsNullOrWhiteSpace(translatedDescription) || LooksUntranslated(descriptionSource, translatedDescription, targetLanguage))
+            {
+                output.Add("[说明未翻译 / description untranslated]");
+                output.Add(descriptionSource);
+            }
+            else
+            {
+                output.Add(translatedDescription);
+            }
+        }
+
+        if (sections.ActionDataLines.Count > 0)
+        {
+            if (output.Count > 0)
+            {
+                output.Add(string.Empty);
+            }
+
+            output.Add("技能数据：");
+            foreach (var line in sections.ActionDataLines)
+            {
+                var localized = LocalizeSupplementLine(line) ?? line.Trim();
+                if (!string.IsNullOrWhiteSpace(localized) && !localized.Equals("技能数据：", StringComparison.Ordinal))
+                {
+                    output.Add(localized);
+                }
+            }
+        }
+
+        foreach (var line in sections.TrailingLines)
+        {
+            var localized = LocalizeSupplementLine(line) ?? line.Trim();
+            if (!string.IsNullOrWhiteSpace(localized))
+            {
+                output.Add(localized);
+            }
+        }
+
+        return CleanTranslatedOutput(string.Join("\n", output));
+    }
+
+    private async Task<string> TranslateDescriptionBlockAsync(
+        object translator,
+        string descriptionSource,
+        string targetLanguage,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(descriptionSource))
+        {
+            return string.Empty;
+        }
+
+        var attempts = new List<(string Text, string SourceLanguage, string TargetLanguage, string Context)>();
+        attempts.Add((descriptionSource, "English", targetLanguage, "TooltipOverlay.DescriptionBlock"));
+        attempts.Add((descriptionSource, "en", targetLanguage, "TooltipOverlay.DescriptionBlock.SourceEn"));
+
+        if (IsChineseTarget(targetLanguage))
+        {
+            attempts.Add((descriptionSource, "English", "Simplified Chinese", "TooltipOverlay.DescriptionBlock.SimplifiedChinese"));
+            attempts.Add((descriptionSource, "en", "zh-CN", "TooltipOverlay.DescriptionBlock.ZhCN"));
+            attempts.Add((BuildStrictDescriptionPrompt(descriptionSource), "English", targetLanguage, "TooltipOverlay.DescriptionBlock.StrictPrompt"));
+        }
+
+        foreach (var attempt in attempts)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var translated = await this.TranslateWithServiceAsync(
+                translator,
+                attempt.Text,
+                attempt.SourceLanguage,
+                attempt.TargetLanguage,
+                attempt.Context,
+                cancellationToken).ConfigureAwait(false);
+
+            translated = CleanTranslatedOutput(StripStrictDescriptionPromptEcho(translated));
+            translated = LocalizeKnownEnglishLabels(translated);
+            translated = RestoreMissingNumericTokens(descriptionSource, translated);
+
+            if (!string.IsNullOrWhiteSpace(translated) && !LooksUntranslated(descriptionSource, translated, targetLanguage))
+            {
+                return translated;
+            }
+        }
+
+        return await this.TranslateDescriptionLineByLineAsync(
+            translator,
+            descriptionSource,
+            targetLanguage,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<string> TranslateDescriptionLineByLineAsync(
+        object translator,
+        string descriptionSource,
+        string targetLanguage,
+        CancellationToken cancellationToken)
+    {
+        var output = new List<string>();
+        foreach (var rawLine in descriptionSource.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var line = rawLine.Trim();
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                output.Add(string.Empty);
+                continue;
+            }
+
+            var translated = await this.TranslateWithServiceAsync(
+                translator,
+                line,
+                "English",
+                targetLanguage,
+                "TooltipOverlay.DescriptionLine",
+                cancellationToken).ConfigureAwait(false);
+            translated = CleanTranslatedOutput(translated);
+
+            if (LooksUntranslated(line, translated, targetLanguage) && IsChineseTarget(targetLanguage))
+            {
+                translated = await this.TranslateWithServiceAsync(
+                    translator,
+                    line,
+                    "en",
+                    "zh-CN",
+                    "TooltipOverlay.DescriptionLine.ZhCN",
+                    cancellationToken).ConfigureAwait(false);
+                translated = CleanTranslatedOutput(translated);
+            }
+
+            output.Add(LooksUntranslated(line, translated, targetLanguage) ? line : translated);
+        }
+
+        return CleanTranslatedOutput(string.Join("\n", output));
+    }
+
+    private static string NormalizeDescriptionBlockForTranslation(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var clean = text.Replace("\r\n", "\n").Replace('\r', '\n');
+        clean = Regex.Replace(clean, @"\b(Description|Action data)\s*:\s*", string.Empty, RegexOptions.IgnoreCase);
+        clean = Regex.Replace(clean, @"\b(Additional Effect|Combo Bonus|Duration)\s*:\s*", "\n$1: ", RegexOptions.IgnoreCase);
+        clean = Regex.Replace(clean, @"(?<=\.)\s+(?=(Additional Effect|Combo Bonus|Duration|Can only|This action|Upon execution|When standing|Consumes|Grants|Deals|Delivers|Restores)\b)", "\n", RegexOptions.IgnoreCase);
+        clean = Regex.Replace(clean, @"[ \t]{2,}", " ");
+        clean = Regex.Replace(clean, @"\n{3,}", "\n\n");
+        return clean.Trim();
+    }
+
+    private static string BuildStrictDescriptionPrompt(string descriptionSource)
+    {
+        return "Translate this FFXIV action tooltip description into Simplified Chinese. " +
+               "Preserve all numbers, potency values, seconds, status names, and line breaks. " +
+               "Do not summarize, do not omit any sentence, and return only the translated tooltip description.\n" +
+               "---TOOLTIP DESCRIPTION---\n" + descriptionSource.Trim() + "\n---END TOOLTIP DESCRIPTION---";
+    }
+
+    private static string StripStrictDescriptionPromptEcho(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var clean = text.Replace("\r\n", "\n").Replace('\r', '\n');
+        clean = Regex.Replace(clean, @"(?is)^.*?---\s*TOOLTIP DESCRIPTION\s*---", string.Empty).Trim();
+        clean = Regex.Replace(clean, @"(?is)---\s*END TOOLTIP DESCRIPTION\s*---.*$", string.Empty).Trim();
+        clean = Regex.Replace(clean, @"(?i)^\s*Translate this FFXIV action tooltip description.*?$", string.Empty, RegexOptions.Multiline).Trim();
+        return clean;
+    }
+
+    private sealed class TooltipBodySections
+    {
+        public List<string> HeaderLines { get; } = new();
+        public List<string> DescriptionLines { get; } = new();
+        public List<string> ActionDataLines { get; } = new();
+        public List<string> TrailingLines { get; } = new();
+        public bool HasDescription => this.DescriptionLines.Count > 0;
+
+        public static TooltipBodySections Parse(string body)
+        {
+            var sections = new TooltipBodySections();
+            var mode = "header";
+            foreach (var raw in body.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
+            {
+                var line = raw.Trim();
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                if (line.Equals("Description:", StringComparison.OrdinalIgnoreCase))
+                {
+                    mode = "description";
+                    continue;
+                }
+
+                if (line.StartsWith("Description:", StringComparison.OrdinalIgnoreCase))
+                {
+                    mode = "description";
+                    var remainder = line["Description:".Length..].Trim();
+                    if (!string.IsNullOrWhiteSpace(remainder))
+                    {
+                        sections.DescriptionLines.Add(remainder);
+                    }
+                    continue;
+                }
+
+                if (line.Equals("Action data:", StringComparison.OrdinalIgnoreCase))
+                {
+                    mode = "actiondata";
+                    continue;
+                }
+
+                if (line.StartsWith("Action data:", StringComparison.OrdinalIgnoreCase))
+                {
+                    mode = "actiondata";
+                    var remainder = line["Action data:".Length..].Trim();
+                    if (!string.IsNullOrWhiteSpace(remainder))
+                    {
+                        sections.ActionDataLines.Add(remainder);
+                    }
+                    continue;
+                }
+
+                switch (mode)
+                {
+                    case "header":
+                        sections.HeaderLines.Add(line);
+                        break;
+                    case "description":
+                        sections.DescriptionLines.Add(line);
+                        break;
+                    case "actiondata":
+                        sections.ActionDataLines.Add(line);
+                        break;
+                    default:
+                        sections.TrailingLines.Add(line);
+                        break;
+                }
+            }
+
+            return sections;
         }
     }
 
