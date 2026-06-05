@@ -6,6 +6,7 @@ using Dalamud.Game.Gui;
 using Dalamud.Plugin.Services;
 using Lumina.Excel.Sheets;
 using LuminaAction = Lumina.Excel.Sheets.Action;
+using LuminaTrait = Lumina.Excel.Sheets.Trait;
 
 namespace Echoglossian.TooltipOverlay;
 
@@ -35,7 +36,7 @@ internal sealed class GameTooltipTextProvider
                 TooltipLookupKind.Action => this.BuildFromSheet<LuminaAction>(key, "Name", "Description"),
                 TooltipLookupKind.CraftingAction => this.BuildFromSheet<CraftAction>(key, "Name", "Description"),
                 TooltipLookupKind.GeneralAction => this.BuildFromSheet<GeneralAction>(key, "Name", "Description"),
-                TooltipLookupKind.Trait => this.BuildFromSheet<Trait>(key, "Name", "Description"),
+                TooltipLookupKind.Trait => this.BuildFromSheet<LuminaTrait>(key, "Name", "Description"),
                 TooltipLookupKind.UnknownActionLike => this.BuildFromSheet<LuminaAction>(key, "Name", "Description"),
                 _ => null,
             };
@@ -112,3 +113,4 @@ internal sealed class GameTooltipTextProvider
         return new TooltipPayload(key, title, body, string.Empty, string.Empty);
     }
 }
+

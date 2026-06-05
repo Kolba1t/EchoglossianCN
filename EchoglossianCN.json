@@ -1,0 +1,14 @@
+﻿{
+  "Name": "Echoglossian CN",
+  "Author": "Kolba1t, based on lokinmodar/Echoglossian",
+  "Punchline": "Mandarin-focused fork of Echoglossian for dialogue and in-game text translation.",
+  "Description": "Realtime game text translator preset/fork for Mandarin Chinese users on global FFXIV clients.",
+  "RepoUrl": "https://github.com/Kolba1t/EchoglossianCN",
+  "Tags": [
+    "translation",
+    "Chinese",
+    "Mandarin",
+    "FFXIV",
+    "Dalamud"
+  ]
+}

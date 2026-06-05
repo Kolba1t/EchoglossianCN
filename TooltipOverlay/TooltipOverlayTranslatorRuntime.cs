@@ -420,7 +420,7 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
             return;
         }
 
-        var oldScale = ImGui.GetWindowFontScale();
+        const float oldScale = 1.0f;
         ImGui.SetWindowFontScale(fontScale);
 
         if (!string.IsNullOrWhiteSpace(payload.Key.DisplayKind))
@@ -528,3 +528,4 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
         }
     }
 }
+
