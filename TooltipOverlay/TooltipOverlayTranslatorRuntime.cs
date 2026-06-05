@@ -32,6 +32,7 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
     private Task? currentTranslationTask;
     private bool started;
     private string? pendingCacheKey;
+    private Vector2 lastOverlaySize = new(420, 260);
 
     public TooltipOverlayTranslatorRuntime(
         Config config,
@@ -49,7 +50,7 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
         this.log = log;
         this.targetLanguageCodeProvider = targetLanguageCodeProvider;
         this.translationServiceProvider = translationServiceProvider;
-        this.textProvider = new GameTooltipTextProvider(dataManager, log);
+        this.textProvider = new GameTooltipTextProvider(dataManager, gameGui, log);
     }
 
     public void Start()
@@ -801,13 +802,7 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
         var includeOriginal = this.ReadConfigBool("TooltipOverlayShowOriginal", TooltipOverlayConfigDefaults.TooltipOverlayShowOriginal);
 
         var mouse = ImGui.GetMousePos();
-        var pos = mouse + new Vector2(28, 24);
-        var viewport = ImGui.GetMainViewport();
-        var workMax = viewport.WorkPos + viewport.WorkSize;
-        if (pos.X + maxWidth > workMax.X)
-        {
-            pos.X = Math.Max(viewport.WorkPos.X + 16, mouse.X - maxWidth - 24);
-        }
+        var pos = this.ComputeMouseFollowerOverlayPos(mouse, this.lastOverlaySize);
 
         ImGui.SetNextWindowPos(pos, ImGuiCond.Always);
         ImGui.SetNextWindowBgAlpha(bgAlpha);
@@ -853,47 +848,52 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
             this.DrawWrapped(payload.OriginalBody, fallback: string.Empty, strong: false);
         }
 
-        // Keep the original mouse-following behavior, but after ImGui has measured the
-        // auto-resized window, push it back into the game viewport if any edge overflows.
-        this.ClampCurrentOverlayWindowToViewport(viewport.WorkPos, viewport.WorkSize);
+        // Keep the original mouse-following behavior. Once ImGui has measured the
+        // auto-resized window, push only the overflowing part back into the game viewport.
+        var measuredSize = ImGui.GetWindowSize();
+        if (measuredSize.X > 1 && measuredSize.Y > 1)
+        {
+            this.lastOverlaySize = measuredSize;
+            var correctedPos = this.ComputeMouseFollowerOverlayPos(mouse, measuredSize);
+            if ((correctedPos - ImGui.GetWindowPos()).LengthSquared() > 0.25f)
+            {
+                ImGui.SetWindowPos(correctedPos, ImGuiCond.Always);
+            }
+        }
 
         ImGui.SetWindowFontScale(oldScale);
         ImGui.End();
     }
 
-    private void ClampCurrentOverlayWindowToViewport(Vector2 workPosRaw, Vector2 workSizeRaw)
+    private Vector2 ComputeMouseFollowerOverlayPos(Vector2 mouse, Vector2 overlaySize)
     {
         const float margin = 16f;
-        var workMin = workPosRaw + new Vector2(margin, margin);
-        var workMax = workPosRaw + workSizeRaw - new Vector2(margin, margin);
-        var pos = ImGui.GetWindowPos();
-        var size = ImGui.GetWindowSize();
+        var desired = mouse + new Vector2(28, 24);
 
-        var next = pos;
-        if (next.X + size.X > workMax.X)
+        // In Dalamud overlays, ImGui mouse/window coordinates line up most reliably with
+        // IO.DisplaySize. MainViewport.WorkSize can be different under some window/fullscreen
+        // configurations, which is why v0.1.6 could still partially overflow.
+        var displaySize = ImGui.GetIO().DisplaySize;
+        if (displaySize.X <= 0 || displaySize.Y <= 0)
         {
-            next.X = workMax.X - size.X;
+            var viewport = ImGui.GetMainViewport();
+            displaySize = viewport.WorkSize;
         }
 
-        if (next.Y + size.Y > workMax.Y)
+        var size = overlaySize;
+        if (size.X <= 1 || size.Y <= 1)
         {
-            next.Y = workMax.Y - size.Y;
+            size = new Vector2(420, 260);
         }
 
-        if (next.X < workMin.X)
-        {
-            next.X = workMin.X;
-        }
+        var min = new Vector2(margin, margin);
+        var max = displaySize - size - new Vector2(margin, margin);
+        if (max.X < min.X) max.X = min.X;
+        if (max.Y < min.Y) max.Y = min.Y;
 
-        if (next.Y < workMin.Y)
-        {
-            next.Y = workMin.Y;
-        }
-
-        if ((next - pos).LengthSquared() > 0.25f)
-        {
-            ImGui.SetWindowPos(next, ImGuiCond.Always);
-        }
+        desired.X = Math.Clamp(desired.X, min.X, max.X);
+        desired.Y = Math.Clamp(desired.Y, min.Y, max.Y);
+        return desired;
     }
 
     private void DrawWrapped(string text, string fallback, bool strong)

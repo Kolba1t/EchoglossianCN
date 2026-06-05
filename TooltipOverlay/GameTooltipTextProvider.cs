@@ -16,11 +16,13 @@ internal sealed class GameTooltipTextProvider
 {
     private readonly IDataManager dataManager;
     private readonly IPluginLog log;
+    private readonly NativeTooltipTextReader nativeTooltipReader;
 
-    public GameTooltipTextProvider(IDataManager dataManager, IPluginLog log)
+    public GameTooltipTextProvider(IDataManager dataManager, IGameGui gameGui, IPluginLog log)
     {
         this.dataManager = dataManager;
         this.log = log;
+        this.nativeTooltipReader = new NativeTooltipTextReader(gameGui, log);
     }
 
     public TooltipPayload? BuildSourcePayload(TooltipLookupKey key)
@@ -32,7 +34,7 @@ internal sealed class GameTooltipTextProvider
 
         try
         {
-            return key.Kind switch
+            var sheetPayload = key.Kind switch
             {
                 TooltipLookupKind.Item => this.BuildFromSheet<Item>(key, "Name", "Description"),
                 TooltipLookupKind.Action => this.BuildActionPayload(key),
@@ -42,6 +44,30 @@ internal sealed class GameTooltipTextProvider
                 TooltipLookupKind.UnknownActionLike => this.BuildActionPayload(key),
                 _ => null,
             };
+
+            // Prefer the actual rendered tooltip when available. It contains client-resolved
+            // lines such as ability type and potency that are often missing from Lumina sheets.
+            var nativePayload = this.nativeTooltipReader.TryBuildPayloadFromVisibleTooltip(key, sheetPayload?.OriginalTitle);
+            if (nativePayload != null)
+            {
+                if (sheetPayload == null)
+                {
+                    return nativePayload;
+                }
+
+                var nativeScore = TextRichnessScore(nativePayload.OriginalBody);
+                var sheetScore = TextRichnessScore(sheetPayload.OriginalBody);
+                if (nativeScore >= Math.Max(40, sheetScore))
+                {
+                    return nativePayload with
+                    {
+                        OriginalTitle = string.IsNullOrWhiteSpace(nativePayload.OriginalTitle) ? sheetPayload.OriginalTitle : nativePayload.OriginalTitle,
+                        OriginalBody = MergeTooltipSections(nativePayload.OriginalBody, this.ExtractUsefulSupplementOnly(sheetPayload.OriginalBody)),
+                    };
+                }
+            }
+
+            return sheetPayload;
         }
         catch (Exception ex)
         {
@@ -84,6 +110,51 @@ internal sealed class GameTooltipTextProvider
         };
 
         return new TooltipLookupKey(kind, hoveredAction.ActionId, false, hoveredAction.DetailKind);
+    }
+
+    private static int TextRichnessScore(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return 0;
+        }
+
+        var letters = text.Count(char.IsLetter);
+        var digits = text.Count(char.IsDigit);
+        var potencyHits = text.Contains("potency", StringComparison.OrdinalIgnoreCase) ? 80 : 0;
+        var typeHits = text.Contains("weaponskill", StringComparison.OrdinalIgnoreCase) ||
+                       text.Contains("spell", StringComparison.OrdinalIgnoreCase) ||
+                       text.Contains("ability", StringComparison.OrdinalIgnoreCase) ? 40 : 0;
+        return letters + (digits * 8) + potencyHits + typeHits + text.Count(c => c == '\n') * 10;
+    }
+
+    private string ExtractUsefulSupplementOnly(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return string.Empty;
+        }
+
+        // If native tooltip scraping works, avoid duplicating our generated Action data block.
+        // Keep only data that is usually not displayed in the native action tooltip.
+        var lines = body.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        var keep = new List<string>();
+        foreach (var raw in lines)
+        {
+            var line = raw.Trim();
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            if (line.StartsWith("Width/axis modifier", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("Maximum charges", StringComparison.OrdinalIgnoreCase))
+            {
+                keep.Add(line);
+            }
+        }
+
+        return keep.Count == 0 ? string.Empty : "Additional data:\n" + string.Join("\n", keep);
     }
 
     private TooltipPayload? BuildActionPayload(TooltipLookupKey key)
