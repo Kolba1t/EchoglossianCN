@@ -89,36 +89,52 @@ internal sealed class GameTooltipTextProvider
                 debug.AppendLine("Native body preview:");
                 debug.AppendLine(PreviewForDebug(nativePayload.OriginalBody));
 
-                if (sheetPayload == null)
+                if (IsActionLike(key.Kind))
                 {
-                    debug.AppendLine("Selected source: NativeTooltip only");
-                    var nativeOnly = nativePayload with
+                    var hybridPayload = ActionTooltipHybridBuilder.TryBuild(key, sheetPayload, nativePayload, debug);
+                    if (hybridPayload != null)
                     {
-                        OriginalBody = PrepareNativeTooltipForTranslation(nativePayload.OriginalBody),
-                    };
-                    this.lastDebugSummary = debug.ToString().Trim();
-                    return nativeOnly;
+                        debug.AppendLine("Native tooltip was used only as a value source; raw native text was not displayed.");
+                        this.lastDebugSummary = debug.ToString().Trim();
+                        return hybridPayload;
+                    }
+
+                    debug.AppendLine("Action hybrid builder returned null; falling back to previous source selection.");
                 }
 
-                var nativeScore = TextRichnessScore(nativePayload.OriginalBody);
-                var sheetScore = TextRichnessScore(sheetPayload.OriginalBody);
-                debug.AppendLine($"Source score comparison: native={nativeScore}, sheet={sheetScore}, threshold={Math.Max(40, sheetScore)}");
-                if (nativeScore >= Math.Max(40, sheetScore))
+                if (!IsActionLike(key.Kind))
                 {
-                    debug.AppendLine("Selected source: NativeTooltip cleaned + sheet supplement");
-                    var cleanedNativeBody = PrepareNativeTooltipForTranslation(nativePayload.OriginalBody);
-                    debug.AppendLine("Cleaned native body preview:");
-                    debug.AppendLine(PreviewForDebug(cleanedNativeBody));
-                    var selected = nativePayload with
+                    if (sheetPayload == null)
                     {
-                        OriginalTitle = string.IsNullOrWhiteSpace(sheetPayload.OriginalTitle) ? nativePayload.OriginalTitle : sheetPayload.OriginalTitle,
-                        OriginalBody = MergeTooltipSections(cleanedNativeBody, this.ExtractUsefulSupplementOnly(sheetPayload.OriginalBody)),
-                    };
-                    this.lastDebugSummary = debug.ToString().Trim();
-                    return selected;
-                }
+                        debug.AppendLine("Selected source: NativeTooltip only");
+                        var nativeOnly = nativePayload with
+                        {
+                            OriginalBody = PrepareNativeTooltipForTranslation(nativePayload.OriginalBody),
+                        };
+                        this.lastDebugSummary = debug.ToString().Trim();
+                        return nativeOnly;
+                    }
 
-                debug.AppendLine("Selected source: LuminaFallback because native was not rich enough");
+                    var nativeScore = TextRichnessScore(nativePayload.OriginalBody);
+                    var sheetScore = TextRichnessScore(sheetPayload.OriginalBody);
+                    debug.AppendLine($"Source score comparison: native={nativeScore}, sheet={sheetScore}, threshold={Math.Max(40, sheetScore)}");
+                    if (nativeScore >= Math.Max(40, sheetScore))
+                    {
+                        debug.AppendLine("Selected source: NativeTooltip cleaned + sheet supplement");
+                        var cleanedNativeBody = PrepareNativeTooltipForTranslation(nativePayload.OriginalBody);
+                        debug.AppendLine("Cleaned native body preview:");
+                        debug.AppendLine(PreviewForDebug(cleanedNativeBody));
+                        var selected = nativePayload with
+                        {
+                            OriginalTitle = string.IsNullOrWhiteSpace(sheetPayload.OriginalTitle) ? nativePayload.OriginalTitle : sheetPayload.OriginalTitle,
+                            OriginalBody = MergeTooltipSections(cleanedNativeBody, this.ExtractUsefulSupplementOnly(sheetPayload.OriginalBody)),
+                        };
+                        this.lastDebugSummary = debug.ToString().Trim();
+                        return selected;
+                    }
+
+                    debug.AppendLine("Selected source: LuminaFallback because native was not rich enough");
+                }
             }
             else
             {
@@ -172,6 +188,15 @@ internal sealed class GameTooltipTextProvider
         };
 
         return new TooltipLookupKey(kind, hoveredAction.ActionId, false, hoveredAction.DetailKind);
+    }
+
+    private static bool IsActionLike(TooltipLookupKind kind)
+    {
+        return kind == TooltipLookupKind.Action ||
+               kind == TooltipLookupKind.CraftingAction ||
+               kind == TooltipLookupKind.GeneralAction ||
+               kind == TooltipLookupKind.Trait ||
+               kind == TooltipLookupKind.UnknownActionLike;
     }
 
     private static int TextRichnessScore(string text)

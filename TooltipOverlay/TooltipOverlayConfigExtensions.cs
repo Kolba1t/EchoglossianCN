@@ -23,5 +23,5 @@ internal static class TooltipOverlayConfigDefaults
     public const int TooltipOverlayMaxMouseDriftPixels = 96;
 
     // Debug patch: show source/translation/native scrape diagnostics directly in the overlay.
-    public const bool TooltipOverlayDebug = true;
+    public const bool TooltipOverlayDebug = false;
 }

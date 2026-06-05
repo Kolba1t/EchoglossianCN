@@ -465,7 +465,12 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
             return "附加数据：";
         }
 
-        var match = Regex.Match(trimmed, @"^(?<label>Level|Cast time|Recast time|Range|Radius|Width/axis modifier|Maximum charges|Primary cost|Secondary cost|Cost|CP|GP):\s*(?<value>.+)$", RegexOptions.IgnoreCase);
+        if (trimmed.Equals("Description:", StringComparison.OrdinalIgnoreCase))
+        {
+            return "说明：";
+        }
+
+        var match = Regex.Match(trimmed, @"^(?<label>Skill type|Job|Category|Level|Potency|Cast time|Recast time|Range|Radius|Width/axis modifier|Maximum charges|MP cost|Primary cost|Secondary cost|Cost|CP|GP):\s*(?<value>.+)$", RegexOptions.IgnoreCase);
         if (!match.Success)
         {
             return null;
@@ -476,16 +481,26 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
         value = Regex.Replace(value, @"\byalms?\b", "米", RegexOptions.IgnoreCase);
         value = Regex.Replace(value, @"\bInstant\b", "即时", RegexOptions.IgnoreCase);
         value = Regex.Replace(value, @"(?<=\d)s\b", "秒", RegexOptions.IgnoreCase);
+        value = Regex.Replace(value, @"\bWeaponskill\b", "战技", RegexOptions.IgnoreCase);
+        value = Regex.Replace(value, @"\bSpell\b", "魔法", RegexOptions.IgnoreCase);
+        value = Regex.Replace(value, @"\bAbility\b", "能力", RegexOptions.IgnoreCase);
+        value = Regex.Replace(value, @"\bTrait\b", "特性", RegexOptions.IgnoreCase);
+        value = Regex.Replace(value, @"\bAffinity\b", "属性", RegexOptions.IgnoreCase);
 
         var zhLabel = label switch
         {
+            "skill type" => "技能类型",
+            "job" => "职业",
+            "category" => "分类",
             "level" => "等级",
+            "potency" => "威力",
             "cast time" => "咏唱时间",
             "recast time" => "复唱时间",
             "range" => "距离",
             "radius" => "范围半径",
             "width/axis modifier" => "宽度/轴向修正",
             "maximum charges" => "最大积蓄次数",
+            "mp cost" => "MP消耗",
             "primary cost" => "主要消耗",
             "secondary cost" => "次要消耗",
             "cost" => "消耗",
@@ -521,6 +536,9 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
         {
             return string.Empty;
         }
+
+        // Remove any native/private UI glyphs that may survive the provider stage.
+        clean = ActionTooltipHybridBuilder.CleanNativeTooltipText(clean);
 
         // Do not prefix instructions into the text itself: non-LLM backends such as
         // Google can translate the instruction literally. Numeric preservation is handled
@@ -596,7 +614,10 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
         // they were successful translations.
         if (ContainsCjk(translated))
         {
-            return false;
+            // Localized fixed labels can add a few Chinese characters even when the
+            // actual English description was returned unchanged. In that case, force
+            // the line-by-line fallback instead of accepting a half-English body.
+            return HasLongUnchangedEnglishLine(source, translated);
         }
 
         var latinLetters = translated.Count(c => (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'));
@@ -614,6 +635,42 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
 
         return translatedCore.Contains(sourceCore, StringComparison.OrdinalIgnoreCase) ||
                sourceCore.Contains(translatedCore, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasLongUnchangedEnglishLine(string source, string translated)
+    {
+        if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(translated))
+        {
+            return false;
+        }
+
+        foreach (var rawLine in source.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.Length < 28)
+            {
+                continue;
+            }
+
+            var letters = line.Count(c => (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'));
+            if (letters < 16)
+            {
+                continue;
+            }
+
+            // Skip fixed stat/label lines: these may intentionally preserve values.
+            if (Regex.IsMatch(line, @"^(Skill type|Job|Category|Level|Potency|Cast time|Recast time|Range|Radius|MP cost|Action data|Description):", RegexOptions.IgnoreCase))
+            {
+                continue;
+            }
+
+            if (translated.Contains(line, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string StripTranslationInstruction(string source)
