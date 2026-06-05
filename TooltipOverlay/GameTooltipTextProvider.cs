@@ -92,8 +92,12 @@ internal sealed class GameTooltipTextProvider
                 if (sheetPayload == null)
                 {
                     debug.AppendLine("Selected source: NativeTooltip only");
+                    var nativeOnly = nativePayload with
+                    {
+                        OriginalBody = PrepareNativeTooltipForTranslation(nativePayload.OriginalBody),
+                    };
                     this.lastDebugSummary = debug.ToString().Trim();
-                    return nativePayload;
+                    return nativeOnly;
                 }
 
                 var nativeScore = TextRichnessScore(nativePayload.OriginalBody);
@@ -101,11 +105,14 @@ internal sealed class GameTooltipTextProvider
                 debug.AppendLine($"Source score comparison: native={nativeScore}, sheet={sheetScore}, threshold={Math.Max(40, sheetScore)}");
                 if (nativeScore >= Math.Max(40, sheetScore))
                 {
-                    debug.AppendLine("Selected source: NativeTooltip + sheet supplement");
+                    debug.AppendLine("Selected source: NativeTooltip cleaned + sheet supplement");
+                    var cleanedNativeBody = PrepareNativeTooltipForTranslation(nativePayload.OriginalBody);
+                    debug.AppendLine("Cleaned native body preview:");
+                    debug.AppendLine(PreviewForDebug(cleanedNativeBody));
                     var selected = nativePayload with
                     {
-                        OriginalTitle = string.IsNullOrWhiteSpace(nativePayload.OriginalTitle) ? sheetPayload.OriginalTitle : nativePayload.OriginalTitle,
-                        OriginalBody = MergeTooltipSections(nativePayload.OriginalBody, this.ExtractUsefulSupplementOnly(sheetPayload.OriginalBody)),
+                        OriginalTitle = string.IsNullOrWhiteSpace(sheetPayload.OriginalTitle) ? nativePayload.OriginalTitle : sheetPayload.OriginalTitle,
+                        OriginalBody = MergeTooltipSections(cleanedNativeBody, this.ExtractUsefulSupplementOnly(sheetPayload.OriginalBody)),
                     };
                     this.lastDebugSummary = debug.ToString().Trim();
                     return selected;
@@ -181,6 +188,25 @@ internal sealed class GameTooltipTextProvider
                        text.Contains("spell", StringComparison.OrdinalIgnoreCase) ||
                        text.Contains("ability", StringComparison.OrdinalIgnoreCase) ? 40 : 0;
         return letters + (digits * 8) + potencyHits + typeHits + text.Count(c => c == '\n') * 10;
+    }
+
+    private static string PrepareNativeTooltipForTranslation(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return string.Empty;
+        }
+
+        var clean = ExcelReflection.CleanGameText(body);
+        // Native tooltip text nodes contain private-use glyph markers for colored/linked UI
+        // fragments. ImGui renders those as placeholder bars/equals signs and translation
+        // backends often fail or return English when they are present. Strip them before the
+        // text reaches the translation service. This keeps resolved native values like potency.
+        clean = System.Text.RegularExpressions.Regex.Replace(clean, "[\uE000-\uF8FF\uFFF0-\uFFFF\uFFFD]", string.Empty);
+        clean = System.Text.RegularExpressions.Regex.Replace(clean, @"[═=]{2,}", " ");
+        clean = System.Text.RegularExpressions.Regex.Replace(clean, @"[ \t]{2,}", " ");
+        clean = System.Text.RegularExpressions.Regex.Replace(clean, @"\n{3,}", "\n\n");
+        return clean.Trim();
     }
 
     private string ExtractUsefulSupplementOnly(string body)

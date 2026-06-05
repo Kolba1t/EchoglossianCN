@@ -431,11 +431,15 @@ internal sealed class NativeTooltipTextReader
     private static IEnumerable<string> NormalizeNativeLines(string text)
     {
         var clean = ExcelReflection.CleanGameText(text);
+        // Strip private-use/control glyphs from native UI text. These are often color/icon
+        // markers around highlighted terms, and they rendered as placeholder bars in v0.1.9.
+        clean = Regex.Replace(clean, "[\uE000-\uF8FF\uFFF0-\uFFFF\uFFFD]", string.Empty);
+        clean = Regex.Replace(clean, @"[═=]{2,}", " ");
         clean = Regex.Replace(clean, @"\s+", " ");
 
         // Put common tooltip labels on their own lines if the native node joined them.
         clean = Regex.Replace(clean, @"\b(Type|Cast|Recast|Range|Radius|Cost|Potency|Combo Potency|Additional Effect|Duration|Acquired|Category):", "\n$1:", RegexOptions.IgnoreCase);
-        clean = Regex.Replace(clean, @"\b(Weaponskill|Ability|Spell|Trait)", "\n$1", RegexOptions.IgnoreCase);
+        clean = Regex.Replace(clean, @"\b(Weaponskill|Ability|Spell|Trait)\b", "\n$1", RegexOptions.IgnoreCase);
 
         foreach (var raw in clean.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
         {
