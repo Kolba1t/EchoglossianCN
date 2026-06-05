@@ -405,28 +405,50 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
 
         if (sections.DescriptionLines.Count > 0)
         {
-            if (output.Count > 0)
-            {
-                output.Add(string.Empty);
-            }
-
-            output.Add("说明：");
             var descriptionSource = NormalizeDescriptionBlockForTranslation(string.Join("\n", sections.DescriptionLines));
-            var translatedDescription = await this.TranslateDescriptionBlockAsync(
-                translator,
-                descriptionSource,
-                targetLanguage,
-                cancellationToken).ConfigureAwait(false);
+            var parsedDescription = StructuredDescriptionSections.Parse(descriptionSource);
 
-            translatedDescription = CleanTranslatedOutput(translatedDescription);
-            if (string.IsNullOrWhiteSpace(translatedDescription) || LooksUntranslated(descriptionSource, translatedDescription, targetLanguage))
+            if (parsedDescription.HasAnyStructuredContent)
             {
-                output.Add("[说明未翻译 / description untranslated]");
-                output.Add(descriptionSource);
+                await this.AppendStructuredDescriptionSectionsAsync(
+                    output,
+                    parsedDescription,
+                    translator,
+                    targetLanguage,
+                    cancellationToken).ConfigureAwait(false);
             }
             else
             {
-                output.Add(translatedDescription);
+                if (output.Count > 0)
+                {
+                    output.Add(string.Empty);
+                }
+
+                output.Add("说明：");
+                var translatedDescription = await this.TranslateDescriptionBlockAsync(
+                    translator,
+                    descriptionSource,
+                    targetLanguage,
+                    cancellationToken).ConfigureAwait(false);
+
+                translatedDescription = CleanTranslatedOutput(translatedDescription);
+                if (string.IsNullOrWhiteSpace(translatedDescription) || LooksUntranslated(descriptionSource, translatedDescription, targetLanguage))
+                {
+                    var localFallback = LocalizeDescriptionFallback(descriptionSource);
+                    if (!string.IsNullOrWhiteSpace(localFallback) && ContainsCjk(localFallback))
+                    {
+                        output.Add(localFallback);
+                    }
+                    else
+                    {
+                        output.Add("[说明未翻译 / description untranslated]");
+                        output.Add(descriptionSource);
+                    }
+                }
+                else
+                {
+                    output.Add(translatedDescription);
+                }
             }
         }
 
@@ -458,6 +480,344 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
         }
 
         return CleanTranslatedOutput(string.Join("\n", output));
+    }
+
+    private async Task AppendStructuredDescriptionSectionsAsync(
+        List<string> output,
+        StructuredDescriptionSections sections,
+        object translator,
+        string targetLanguage,
+        CancellationToken cancellationToken)
+    {
+        await this.AppendDescriptionSectionAsync(output, "说明：", sections.MainLines, translator, targetLanguage, cancellationToken, TooltipDescriptionSectionKind.Main).ConfigureAwait(false);
+        await this.AppendDescriptionSectionAsync(output, "追加效果：", sections.AdditionalEffectLines, translator, targetLanguage, cancellationToken, TooltipDescriptionSectionKind.AdditionalEffect).ConfigureAwait(false);
+        await this.AppendDescriptionSectionAsync(output, "持续时间：", sections.DurationLines, translator, targetLanguage, cancellationToken, TooltipDescriptionSectionKind.Duration).ConfigureAwait(false);
+        await this.AppendDescriptionSectionAsync(output, "连击加成：", sections.ComboBonusLines, translator, targetLanguage, cancellationToken, TooltipDescriptionSectionKind.ComboBonus).ConfigureAwait(false);
+        await this.AppendDescriptionSectionAsync(output, "发动条件：", sections.RequirementLines, translator, targetLanguage, cancellationToken, TooltipDescriptionSectionKind.Requirement).ConfigureAwait(false);
+        await this.AppendDescriptionSectionAsync(output, "特殊说明：", sections.SpecialNoteLines, translator, targetLanguage, cancellationToken, TooltipDescriptionSectionKind.SpecialNote).ConfigureAwait(false);
+        await this.AppendDescriptionSectionAsync(output, "其他说明：", sections.OtherLines, translator, targetLanguage, cancellationToken, TooltipDescriptionSectionKind.Other).ConfigureAwait(false);
+    }
+
+    private async Task AppendDescriptionSectionAsync(
+        List<string> output,
+        string zhHeader,
+        IReadOnlyList<string> sourceLines,
+        object translator,
+        string targetLanguage,
+        CancellationToken cancellationToken,
+        TooltipDescriptionSectionKind kind)
+    {
+        if (sourceLines.Count == 0)
+        {
+            return;
+        }
+
+        var renderedLines = new List<string>();
+        foreach (var line in sourceLines)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var rendered = await this.TranslateOrLocalizeDescriptionLineAsync(
+                line,
+                translator,
+                targetLanguage,
+                cancellationToken,
+                kind).ConfigureAwait(false);
+
+            if (!string.IsNullOrWhiteSpace(rendered))
+            {
+                renderedLines.Add(rendered);
+            }
+        }
+
+        if (renderedLines.Count == 0)
+        {
+            return;
+        }
+
+        if (output.Count > 0)
+        {
+            output.Add(string.Empty);
+        }
+
+        output.Add(zhHeader);
+        output.AddRange(renderedLines);
+    }
+
+    private async Task<string> TranslateOrLocalizeDescriptionLineAsync(
+        string sourceLine,
+        object translator,
+        string targetLanguage,
+        CancellationToken cancellationToken,
+        TooltipDescriptionSectionKind kind)
+    {
+        var cleanLine = NormalizeDescriptionBlockForTranslation(sourceLine);
+        cleanLine = RemoveLeadingEnglishDescriptionLabel(cleanLine, kind);
+        cleanLine = CleanupDescriptionControlMarkers(cleanLine);
+        if (string.IsNullOrWhiteSpace(cleanLine))
+        {
+            return string.Empty;
+        }
+
+        var local = LocalizeDescriptionLineFallback(cleanLine);
+        local = StripDuplicatedSectionPrefix(local, kind);
+        if (!string.IsNullOrWhiteSpace(local) && ContainsCjk(local) && !LooksUntranslated(cleanLine, local, targetLanguage))
+        {
+            return CleanTranslatedOutput(local);
+        }
+
+        var translated = await this.TranslateDescriptionBlockAsync(
+            translator,
+            cleanLine,
+            targetLanguage,
+            cancellationToken).ConfigureAwait(false);
+
+        translated = CleanTranslatedOutput(translated);
+        translated = StripDuplicatedSectionPrefix(translated, kind);
+        translated = RestoreMissingNumericTokens(cleanLine, translated);
+
+        if (!string.IsNullOrWhiteSpace(translated) && !LooksUntranslated(cleanLine, translated, targetLanguage))
+        {
+            return translated;
+        }
+
+        if (!string.IsNullOrWhiteSpace(local) && ContainsCjk(local))
+        {
+            return CleanTranslatedOutput(local);
+        }
+
+        return cleanLine;
+    }
+
+    private enum TooltipDescriptionSectionKind
+    {
+        Main,
+        AdditionalEffect,
+        Duration,
+        ComboBonus,
+        Requirement,
+        SpecialNote,
+        Other,
+    }
+
+    private static string RemoveLeadingEnglishDescriptionLabel(string line, TooltipDescriptionSectionKind kind)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return string.Empty;
+        }
+
+        var clean = line.Trim();
+        clean = Regex.Replace(clean, @"^Description\s*:\s*", string.Empty, RegexOptions.IgnoreCase);
+
+        clean = kind switch
+        {
+            TooltipDescriptionSectionKind.AdditionalEffect => Regex.Replace(clean, @"^Additional\s+Effect\s*:\s*", string.Empty, RegexOptions.IgnoreCase),
+            TooltipDescriptionSectionKind.Duration => Regex.Replace(clean, @"^Duration\s*:\s*", string.Empty, RegexOptions.IgnoreCase),
+            TooltipDescriptionSectionKind.ComboBonus => Regex.Replace(clean, @"^Combo\s+Bonus\s*:\s*", string.Empty, RegexOptions.IgnoreCase),
+            _ => clean,
+        };
+
+        return clean.Trim();
+    }
+
+    private static string StripDuplicatedSectionPrefix(string text, TooltipDescriptionSectionKind kind)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var clean = text.Trim();
+        clean = kind switch
+        {
+            TooltipDescriptionSectionKind.AdditionalEffect => Regex.Replace(clean, @"^追加效果[：:]\s*", string.Empty),
+            TooltipDescriptionSectionKind.Duration => Regex.Replace(clean, @"^持续时间[：:]\s*", string.Empty),
+            TooltipDescriptionSectionKind.ComboBonus => Regex.Replace(clean, @"^连击加成[：:]\s*", string.Empty),
+            TooltipDescriptionSectionKind.Requirement => Regex.Replace(clean, @"^发动条件[：:]\s*", string.Empty),
+            TooltipDescriptionSectionKind.SpecialNote => Regex.Replace(clean, @"^特殊说明[：:]\s*", string.Empty),
+            TooltipDescriptionSectionKind.Other => Regex.Replace(clean, @"^其他说明[：:]\s*", string.Empty),
+            _ => Regex.Replace(clean, @"^说明[：:]\s*", string.Empty),
+        };
+
+        return clean.Trim();
+    }
+
+    private static string LocalizeDescriptionFallback(string descriptionSource)
+    {
+        if (string.IsNullOrWhiteSpace(descriptionSource))
+        {
+            return string.Empty;
+        }
+
+        var text = NormalizeDescriptionBlockForTranslation(descriptionSource);
+        var lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        var output = new List<string>();
+
+        foreach (var raw in lines)
+        {
+            var line = raw.Trim();
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                if (output.Count > 0 && !string.IsNullOrWhiteSpace(output[^1]))
+                {
+                    output.Add(string.Empty);
+                }
+                continue;
+            }
+
+            line = CleanupDescriptionControlMarkers(line);
+            var localized = LocalizeDescriptionLineFallback(line);
+            if (!string.IsNullOrWhiteSpace(localized))
+            {
+                output.Add(localized);
+            }
+        }
+
+        return CleanTranslatedOutput(string.Join("\n", output));
+    }
+
+    private static string CleanupDescriptionControlMarkers(string line)
+    {
+        var clean = Regex.Replace(line, @"\s+", " ").Trim();
+        clean = Regex.Replace(clean, @"\b[HI]\b", " ");
+        clean = Regex.Replace(clean, @"\s+([,.;:])", "$1");
+        clean = Regex.Replace(clean, @"([:])(?=\S)", "$1 ");
+        clean = Regex.Replace(clean, @"\s{2,}", " ").Trim();
+        return clean;
+    }
+
+    private static string LocalizeDescriptionLineFallback(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return string.Empty;
+        }
+
+        var original = CleanupDescriptionControlMarkers(line);
+        var working = original;
+        working = Regex.Replace(working, @"^Description\s*:\s*", string.Empty, RegexOptions.IgnoreCase).Trim();
+
+        // Very common FFXIV action-tooltip sentence patterns. This is intentionally a
+        // conservative fallback: it only rewrites shapes we understand and keeps unknown
+        // status/proper-noun names visible instead of guessing.
+        var m = Regex.Match(working, @"^Deals\s+(?<element>[A-Za-z]+)\s+damage\s+with\s+a\s+potency\s+of\s+(?<potency>\d+(?:\.\d+)?)\.?$", RegexOptions.IgnoreCase);
+        if (m.Success)
+        {
+            return $"造成{LocalizeElement(m.Groups["element"].Value)}属性伤害，威力为{m.Groups["potency"].Value}。";
+        }
+
+        m = Regex.Match(working, @"^Delivers\s+an\s+attack\s+with\s+a\s+potency\s+of\s+(?<potency>\d+(?:\.\d+)?)\.?$", RegexOptions.IgnoreCase);
+        if (m.Success)
+        {
+            return $"发动攻击，威力为{m.Groups["potency"].Value}。";
+        }
+
+        m = Regex.Match(working, @"^Additional\s+Effect\s*:\s*Grants\s+(?<status>.+?)\.?$", RegexOptions.IgnoreCase);
+        if (m.Success)
+        {
+            return $"追加效果：获得 {CleanStatusName(m.Groups["status"].Value)}。";
+        }
+
+        m = Regex.Match(working, @"^Additional\s+Effect\s*:\s*(?<effect>.+?)\.?$", RegexOptions.IgnoreCase);
+        if (m.Success)
+        {
+            return $"追加效果：{LocalizeKnownDescriptionFragments(CleanupDescriptionControlMarkers(m.Groups["effect"].Value))}。";
+        }
+
+        m = Regex.Match(working, @"^Combo\s+Bonus\s*:\s*(?<effect>.+?)\.?$", RegexOptions.IgnoreCase);
+        if (m.Success)
+        {
+            return $"连击加成：{LocalizeKnownDescriptionFragments(CleanupDescriptionControlMarkers(m.Groups["effect"].Value))}。";
+        }
+
+        m = Regex.Match(working, @"^Duration\s*:\s*(?<duration>\d+(?:\.\d+)?)\s*s\s*(?<rest>.*)$", RegexOptions.IgnoreCase);
+        if (m.Success)
+        {
+            var rest = CleanupDescriptionControlMarkers(m.Groups["rest"].Value);
+            return string.IsNullOrWhiteSpace(rest)
+                ? $"持续时间：{m.Groups["duration"].Value}秒。"
+                : $"持续时间：{m.Groups["duration"].Value}秒。{LocalizeKnownDescriptionFragments(rest)}";
+        }
+
+        m = Regex.Match(working, @"^Can\s+only\s+be\s+executed\s+while\s+under\s+the\s+effect\s+of\s+(?<status>.+?)\.?$", RegexOptions.IgnoreCase);
+        if (m.Success)
+        {
+            return $"只能在 {CleanStatusName(m.Groups["status"].Value)} 效果期间发动。";
+        }
+
+        m = Regex.Match(working, @"^When\s+standing\s+within\s+the\s+bounds\s+of\s+(?<status>.+?),\s*consumes\s+a\s+stack\s+of\s+(?<consume>.+?)\s+if\s+available\.?$", RegexOptions.IgnoreCase);
+        if (m.Success)
+        {
+            return $"站在 {CleanStatusName(m.Groups["status"].Value)} 范围内时，若有 {CleanStatusName(m.Groups["consume"].Value)} 层数，则消耗1层。";
+        }
+
+        m = Regex.Match(working, @"^Grants\s+(?<status>.+?)\.?$", RegexOptions.IgnoreCase);
+        if (m.Success)
+        {
+            return $"获得 {CleanStatusName(m.Groups["status"].Value)}。";
+        }
+
+        if (Regex.IsMatch(working, @"^This\s+action\s+does\s+not\s+share\s+a\s+recast\s+timer\s+with\s+any\s+other\s+actions\.?$", RegexOptions.IgnoreCase))
+        {
+            return "此技能不与其他技能共享复唱时间。";
+        }
+
+        if (Regex.IsMatch(working, @"^Upon\s+execution,\s*the\s+recast\s+timer\s+for\s+this\s+action\s+will\s+be\s+applied\s+to\s+all\s+other\s+weaponskills\s+and\s+magic\s+actions\.?$", RegexOptions.IgnoreCase))
+        {
+            return "发动后，此技能的复唱时间会应用于所有其他战技与魔法技能。";
+        }
+
+        return LocalizeKnownDescriptionFragments(working);
+    }
+
+    private static string LocalizeKnownDescriptionFragments(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var result = CleanupDescriptionControlMarkers(text);
+        result = Regex.Replace(result, @"\bDeals\b", "造成", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\bDelivers\b", "发动", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\bdamage\b", "伤害", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\bwith\s+a\s+potency\s+of\b", "，威力为", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\bAdditional\s+Effect\b", "追加效果", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\bCombo\s+Bonus\b", "连击加成", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\bDuration\b", "持续时间", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\bGrants\b", "获得", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\bCan\s+only\s+be\s+executed\s+while\s+under\s+the\s+effect\s+of\b", "只能在以下效果期间发动：", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\bThis\s+action\s+does\s+not\s+share\s+a\s+recast\s+timer\s+with\s+any\s+other\s+actions\b", "此技能不与其他技能共享复唱时间", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\bUpon\s+execution\b", "发动后", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\brecast\s+timer\b", "复唱时间", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\bweaponskills\b", "战技", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\bmagic\s+actions\b", "魔法技能", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"(?<=\d)s\b", "秒", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\s+([，。,.])", "$1");
+        result = Regex.Replace(result, @"\.\s*$", "。");
+        return result.Trim();
+    }
+
+    private static string LocalizeElement(string element)
+    {
+        return element.ToLowerInvariant() switch
+        {
+            "fire" => "火",
+            "ice" => "冰",
+            "wind" => "风",
+            "earth" => "土",
+            "lightning" => "雷",
+            "water" => "水",
+            "unaspected" => "无属性",
+            _ => element,
+        };
+    }
+
+    private static string CleanStatusName(string status)
+    {
+        var clean = CleanupDescriptionControlMarkers(status);
+        clean = Regex.Replace(clean, @"\s+", " ").Trim(' ', '.', ',', ':', ';');
+        return clean;
     }
 
     private async Task<string> TranslateDescriptionBlockAsync(
@@ -590,6 +950,108 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
         clean = Regex.Replace(clean, @"(?is)---\s*END TOOLTIP DESCRIPTION\s*---.*$", string.Empty).Trim();
         clean = Regex.Replace(clean, @"(?i)^\s*Translate this FFXIV action tooltip description.*?$", string.Empty, RegexOptions.Multiline).Trim();
         return clean;
+    }
+
+
+    private sealed class StructuredDescriptionSections
+    {
+        public List<string> MainLines { get; } = new();
+        public List<string> AdditionalEffectLines { get; } = new();
+        public List<string> DurationLines { get; } = new();
+        public List<string> ComboBonusLines { get; } = new();
+        public List<string> RequirementLines { get; } = new();
+        public List<string> SpecialNoteLines { get; } = new();
+        public List<string> OtherLines { get; } = new();
+
+        public bool HasAnyStructuredContent =>
+            this.MainLines.Count +
+            this.AdditionalEffectLines.Count +
+            this.DurationLines.Count +
+            this.ComboBonusLines.Count +
+            this.RequirementLines.Count +
+            this.SpecialNoteLines.Count +
+            this.OtherLines.Count > 0;
+
+        public static StructuredDescriptionSections Parse(string description)
+        {
+            var result = new StructuredDescriptionSections();
+            var normalized = NormalizeDescriptionBlockForTranslation(description);
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                return result;
+            }
+
+            foreach (var raw in normalized.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
+            {
+                var line = CleanupDescriptionControlMarkers(raw.Trim());
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                if (Regex.IsMatch(line, @"^Description\s*:\s*$", RegexOptions.IgnoreCase))
+                {
+                    continue;
+                }
+
+                if (Regex.IsMatch(line, @"^Description\s*:\s*", RegexOptions.IgnoreCase))
+                {
+                    line = Regex.Replace(line, @"^Description\s*:\s*", string.Empty, RegexOptions.IgnoreCase).Trim();
+                    if (!string.IsNullOrWhiteSpace(line))
+                    {
+                        result.MainLines.Add(line);
+                    }
+
+                    continue;
+                }
+
+                if (Regex.IsMatch(line, @"^Additional\s+Effect\s*:", RegexOptions.IgnoreCase))
+                {
+                    result.AdditionalEffectLines.Add(line);
+                    continue;
+                }
+
+                if (Regex.IsMatch(line, @"^Duration\s*:", RegexOptions.IgnoreCase))
+                {
+                    result.DurationLines.Add(line);
+                    continue;
+                }
+
+                if (Regex.IsMatch(line, @"^Combo\s+Bonus\s*:", RegexOptions.IgnoreCase))
+                {
+                    result.ComboBonusLines.Add(line);
+                    continue;
+                }
+
+                if (Regex.IsMatch(line, @"^Can\s+only\s+be\s+executed\b|^Cannot\s+be\s+executed\b|^Cannot\s+use\b", RegexOptions.IgnoreCase))
+                {
+                    result.RequirementLines.Add(line);
+                    continue;
+                }
+
+                if (Regex.IsMatch(line, @"^This\s+action\b|^Upon\s+execution\b|^When\s+standing\b|^Consumes\b|^Shares\s+a\s+recast\s+timer\b|^Does\s+not\s+share\b", RegexOptions.IgnoreCase))
+                {
+                    result.SpecialNoteLines.Add(line);
+                    continue;
+                }
+
+                if (Regex.IsMatch(line, @"^Deals\b|^Delivers\b|^Restores\b|^Extends\b|^Increases\b|^Reduces\b", RegexOptions.IgnoreCase))
+                {
+                    result.MainLines.Add(line);
+                    continue;
+                }
+
+                if (Regex.IsMatch(line, @"^Grants\b", RegexOptions.IgnoreCase))
+                {
+                    result.AdditionalEffectLines.Add(line);
+                    continue;
+                }
+
+                result.OtherLines.Add(line);
+            }
+
+            return result;
+        }
     }
 
     private sealed class TooltipBodySections
