@@ -147,9 +147,9 @@ internal static class ExcelReflection
 
         // Remove common generated markup while keeping the visible text/numbers.
         text = Regex.Replace(text, @"<[^>]+>", string.Empty);
-        text = Regex.Replace(text, @"\\s*\\n\\s*", "\n");
-        text = Regex.Replace(text, @"[ \\t]{2,}", " ");
-        text = Regex.Replace(text, @"\\n{3,}", "\n\n");
+        text = Regex.Replace(text, @"\s*\n\s*", "\n");
+        text = Regex.Replace(text, @"[ \t]{2,}", " ");
+        text = Regex.Replace(text, @"\n{3,}", "\n\n");
 
         return text.Trim();
     }

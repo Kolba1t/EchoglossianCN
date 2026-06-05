@@ -326,20 +326,19 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
             var bodyForTranslation = PrepareTextForTranslation(source.OriginalBody);
             var translatedBody = string.IsNullOrWhiteSpace(bodyForTranslation)
                 ? string.Empty
-                : await this.TranslateWithServiceAsync(
+                : await this.TranslateBodyRobustAsync(
                     translator,
                     bodyForTranslation,
-                    "English",
                     targetLanguage,
-                    "TooltipOverlay.Body.PreserveAllNumbersAndGameTerms",
                     cancellationToken).ConfigureAwait(false);
 
             cancellationToken.ThrowIfCancellationRequested();
 
             translatedBody = CleanTranslatedOutput(translatedBody);
+            translatedBody = LocalizeKnownEnglishLabels(translatedBody);
             translatedBody = RestoreMissingNumericTokens(bodyForTranslation, translatedBody);
 
-            // If the service returns unchanged English for a non-English target, keep a
+            // If the service still returns unchanged English for a non-English target, keep a
             // visible note rather than silently showing the user an untranslated overlay.
             if (!string.IsNullOrWhiteSpace(bodyForTranslation) && LooksUntranslated(bodyForTranslation, translatedBody, targetLanguage))
             {
@@ -373,6 +372,148 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
                 this.pendingCacheKey = null;
             }
         }
+    }
+
+
+    private async Task<string> TranslateBodyRobustAsync(
+        object translator,
+        string bodyForTranslation,
+        string targetLanguage,
+        CancellationToken cancellationToken)
+    {
+        var translated = await this.TranslateWithServiceAsync(
+            translator,
+            bodyForTranslation,
+            "English",
+            targetLanguage,
+            "TooltipOverlay.Body.PreserveAllNumbersAndGameTerms",
+            cancellationToken).ConfigureAwait(false);
+
+        translated = CleanTranslatedOutput(translated);
+        translated = LocalizeKnownEnglishLabels(translated);
+
+        // Google-style backends sometimes return long multiline action text unchanged,
+        // while still translating short title strings. If that happens, retry by line.
+        if (!LooksUntranslated(bodyForTranslation, translated, targetLanguage))
+        {
+            return translated;
+        }
+
+        return await this.TranslateBodyLineByLineAsync(
+            translator,
+            bodyForTranslation,
+            targetLanguage,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<string> TranslateBodyLineByLineAsync(
+        object translator,
+        string bodyForTranslation,
+        string targetLanguage,
+        CancellationToken cancellationToken)
+    {
+        var output = new List<string>();
+        foreach (var rawLine in bodyForTranslation.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var line = rawLine.Trim();
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                output.Add(string.Empty);
+                continue;
+            }
+
+            var local = LocalizeSupplementLine(line);
+            if (local != null)
+            {
+                output.Add(local);
+                continue;
+            }
+
+            var translatedLine = await this.TranslateWithServiceAsync(
+                translator,
+                line,
+                "English",
+                targetLanguage,
+                "TooltipOverlay.BodyLine.PreserveNumbersAndFFXIVTerms",
+                cancellationToken).ConfigureAwait(false);
+
+            translatedLine = CleanTranslatedOutput(translatedLine);
+            translatedLine = LocalizeKnownEnglishLabels(translatedLine);
+
+            // If the backend still refuses to translate this specific line, leave the
+            // original visible rather than dropping information from the tooltip.
+            output.Add(LooksUntranslated(line, translatedLine, targetLanguage) ? line : translatedLine);
+        }
+
+        return string.Join("\n", output).Trim();
+    }
+
+    private static string? LocalizeSupplementLine(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return null;
+        }
+
+        var trimmed = line.Trim();
+        if (trimmed.Equals("Action data:", StringComparison.OrdinalIgnoreCase))
+        {
+            return "技能数据：";
+        }
+
+        if (trimmed.Equals("Additional data:", StringComparison.OrdinalIgnoreCase))
+        {
+            return "附加数据：";
+        }
+
+        var match = Regex.Match(trimmed, @"^(?<label>Level|Cast time|Recast time|Range|Radius|Width/axis modifier|Maximum charges|Primary cost|Secondary cost|Cost|CP|GP):\s*(?<value>.+)$", RegexOptions.IgnoreCase);
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        var label = match.Groups["label"].Value.ToLowerInvariant();
+        var value = match.Groups["value"].Value.Trim();
+        value = Regex.Replace(value, @"\byalms?\b", "米", RegexOptions.IgnoreCase);
+        value = Regex.Replace(value, @"\bInstant\b", "即时", RegexOptions.IgnoreCase);
+        value = Regex.Replace(value, @"(?<=\d)s\b", "秒", RegexOptions.IgnoreCase);
+
+        var zhLabel = label switch
+        {
+            "level" => "等级",
+            "cast time" => "咏唱时间",
+            "recast time" => "复唱时间",
+            "range" => "距离",
+            "radius" => "范围半径",
+            "width/axis modifier" => "宽度/轴向修正",
+            "maximum charges" => "最大积蓄次数",
+            "primary cost" => "主要消耗",
+            "secondary cost" => "次要消耗",
+            "cost" => "消耗",
+            "cp" => "制作力",
+            "gp" => "采集力",
+            _ => null,
+        };
+
+        return zhLabel == null ? null : $"{zhLabel}：{value}";
+    }
+
+    private static string LocalizeKnownEnglishLabels(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            lines[i] = LocalizeSupplementLine(lines[i]) ?? lines[i];
+        }
+
+        return string.Join("\n", lines);
     }
 
 

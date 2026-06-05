@@ -210,8 +210,8 @@ internal sealed class GameTooltipTextProvider
         AddLevel(lines, row);
         AddHundredMs(lines, row, "Cast100ms", "Cast time", zeroAsInstant: true);
         AddHundredMs(lines, row, "Recast100ms", "Recast time", zeroAsInstant: false);
-        AddNumber(lines, row, "Range", "Range", skipZero: true);
-        AddNumber(lines, row, "EffectRange", "Radius", skipZero: true);
+        AddRange(lines, row, "Range", "Range", meleeFallbackYalms: 3);
+        AddRange(lines, row, "EffectRange", "Radius", meleeFallbackYalms: null);
         AddNumber(lines, row, "XAxisModifier", "Width/axis modifier", skipZero: true);
         AddNumber(lines, row, "MaxCharges", "Maximum charges", skipZero: true);
         AddCost(lines, row);
@@ -300,7 +300,41 @@ internal sealed class GameTooltipTextProvider
             return;
         }
 
+        // Negative values usually mean "not applicable" or client-resolved display data.
+        // Do not show raw -1 style values in the overlay unless a dedicated helper maps them.
+        if (value < 0)
+        {
+            return;
+        }
+
         lines.Add($"{label}: {FormatNumber(value)}");
+    }
+
+    private static void AddRange(ICollection<string> lines, object row, string propertyName, string label, decimal? meleeFallbackYalms)
+    {
+        if (!ExcelReflection.TryReadNumber(row, propertyName, out var value))
+        {
+            return;
+        }
+
+        if (value == 0)
+        {
+            return;
+        }
+
+        // Some melee weaponskills/actions expose Range = -1 in the sheet while the native
+        // tooltip resolves that to the normal melee range. Avoid showing raw -1 to users.
+        if (value < 0)
+        {
+            if (meleeFallbackYalms.HasValue)
+            {
+                lines.Add($"{label}: {FormatNumber(meleeFallbackYalms.Value)} yalms");
+            }
+
+            return;
+        }
+
+        lines.Add($"{label}: {FormatNumber(value)} yalms");
     }
 
     private static string MergeTooltipSections(params string[] sections)
