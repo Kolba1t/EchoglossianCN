@@ -12,9 +12,9 @@
     "DalamudApiLevel": 15,
     "IsHide": false,
     "IsTestingExclusive": false,
-    "DownloadLinkInstall": "https://github.com/Kolba1t/EchoglossianCN/releases/download/vX.Y.Z/latest",
+    "DownloadLinkInstall": "https://github.com/Kolba1t/EchoglossianCN/releases/download/vX.Y.Z/latest.zip",
     "DownloadLinkTesting": null,
-    "DownloadLinkUpdate": "https://github.com/Kolba1t/EchoglossianCN/releases/download/vX.Y.Z/latest",
+    "DownloadLinkUpdate": "https://github.com/Kolba1t/EchoglossianCN/releases/download/vX.Y.Z/latest.zip",
     "LastUpdate": "1780663323"
     "Tags": ["translation", "Chinese", "Mandarin", "FFXIV", "Dalamud"]	
   }
