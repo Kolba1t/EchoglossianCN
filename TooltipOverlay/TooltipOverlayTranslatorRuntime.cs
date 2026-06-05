@@ -303,23 +303,14 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
                 return;
             }
 
-            // Action and trait names are proper nouns in FFXIV. Machine translators often turn
-            // names like "Imperator" into generic words like "Emperor", which is worse than
-            // leaving the original name visible. Item names are still translated because they
-            // are usually descriptive enough to be useful in Mandarin.
-            var preserveTitle = source.Key.Kind != TooltipLookupKind.Item;
-
-            var translatedTitle = string.IsNullOrWhiteSpace(source.OriginalTitle)
-                ? string.Empty
-                : preserveTitle
-                    ? source.OriginalTitle
-                    : await this.TranslateWithServiceAsync(
-                        translator,
-                        source.OriginalTitle,
-                        "English",
-                        targetLanguage,
-                        "TooltipOverlay.Title",
-                        cancellationToken).ConfigureAwait(false);
+            // v0.1.5 translates action names again. Earlier builds preserved action names
+            // to avoid Imperator -> Emperor, but that made the overlay feel half-English.
+            // If title translation fails or returns English, we fall back to the original.
+            var translatedTitle = await this.TranslateTitleRobustAsync(
+                translator,
+                source.OriginalTitle,
+                targetLanguage,
+                cancellationToken).ConfigureAwait(false);
 
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -375,30 +366,51 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
     }
 
 
+    private async Task<string> TranslateTitleRobustAsync(
+        object translator,
+        string originalTitle,
+        string targetLanguage,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(originalTitle))
+        {
+            return string.Empty;
+        }
+
+        var cleanTitle = PrepareTextForTranslation(originalTitle);
+        if (string.IsNullOrWhiteSpace(cleanTitle))
+        {
+            return originalTitle;
+        }
+
+        var translated = await this.TranslateWithBestAttemptAsync(
+            translator,
+            cleanTitle,
+            targetLanguage,
+            "TooltipOverlay.Title.TranslateAbilityOrItemNameToChinese.KeepNumbers",
+            cancellationToken).ConfigureAwait(false);
+
+        translated = CleanTranslatedOutput(translated);
+        if (LooksUntranslated(cleanTitle, translated, targetLanguage))
+        {
+            return originalTitle;
+        }
+
+        return translated;
+    }
+
+
     private async Task<string> TranslateBodyRobustAsync(
         object translator,
         string bodyForTranslation,
         string targetLanguage,
         CancellationToken cancellationToken)
     {
-        var translated = await this.TranslateWithServiceAsync(
-            translator,
-            bodyForTranslation,
-            "English",
-            targetLanguage,
-            "TooltipOverlay.Body.PreserveAllNumbersAndGameTerms",
-            cancellationToken).ConfigureAwait(false);
-
-        translated = CleanTranslatedOutput(translated);
-        translated = LocalizeKnownEnglishLabels(translated);
-
-        // Google-style backends sometimes return long multiline action text unchanged,
-        // while still translating short title strings. If that happens, retry by line.
-        if (!LooksUntranslated(bodyForTranslation, translated, targetLanguage))
-        {
-            return translated;
-        }
-
+        // v0.1.5b: Always translate tooltip bodies line-by-line. Earlier builds translated
+        // the full block first; generated stat lines such as Cast time/Range could be
+        // localized locally, causing the whole block to look "translated" even while the
+        // actual action description stayed English. Per-line handling is slower on a cold
+        // cache, but cached hovers are instant and it is much more reliable for tooltips.
         return await this.TranslateBodyLineByLineAsync(
             translator,
             bodyForTranslation,
@@ -431,10 +443,9 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
                 continue;
             }
 
-            var translatedLine = await this.TranslateWithServiceAsync(
+            var translatedLine = await this.TranslateWithBestAttemptAsync(
                 translator,
                 line,
-                "English",
                 targetLanguage,
                 "TooltipOverlay.BodyLine.PreserveNumbersAndFFXIVTerms",
                 cancellationToken).ConfigureAwait(false);
@@ -442,9 +453,11 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
             translatedLine = CleanTranslatedOutput(translatedLine);
             translatedLine = LocalizeKnownEnglishLabels(translatedLine);
 
-            // If the backend still refuses to translate this specific line, leave the
-            // original visible rather than dropping information from the tooltip.
-            output.Add(LooksUntranslated(line, translatedLine, targetLanguage) ? line : translatedLine);
+            // If the backend still refuses to translate this specific line, keep the original
+            // visible with a marker instead of silently pretending it translated.
+            output.Add(LooksUntranslated(line, translatedLine, targetLanguage)
+                ? $"[未翻译] {line}"
+                : translatedLine);
         }
 
         return string.Join("\n", output).Trim();
@@ -468,7 +481,7 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
             return "附加数据：";
         }
 
-        var match = Regex.Match(trimmed, @"^(?<label>Level|Cast time|Recast time|Range|Radius|Width/axis modifier|Maximum charges|Primary cost|Secondary cost|Cost|CP|GP):\s*(?<value>.+)$", RegexOptions.IgnoreCase);
+        var match = Regex.Match(trimmed, @"^(?<label>Skill type|Potency|Potency values|Level|Cast time|Recast time|Range|Radius|Width/axis modifier|Maximum charges|Primary cost|Secondary cost|Cost|CP|GP):\s*(?<value>.+)$", RegexOptions.IgnoreCase);
         if (!match.Success)
         {
             return null;
@@ -478,10 +491,16 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
         var value = match.Groups["value"].Value.Trim();
         value = Regex.Replace(value, @"\byalms?\b", "米", RegexOptions.IgnoreCase);
         value = Regex.Replace(value, @"\bInstant\b", "即时", RegexOptions.IgnoreCase);
+        value = Regex.Replace(value, @"\bWeaponskill\b", "战技", RegexOptions.IgnoreCase);
+        value = Regex.Replace(value, @"\bSpell\b", "魔法", RegexOptions.IgnoreCase);
+        value = Regex.Replace(value, @"\bAbility\b", "能力", RegexOptions.IgnoreCase);
         value = Regex.Replace(value, @"(?<=\d)s\b", "秒", RegexOptions.IgnoreCase);
 
         var zhLabel = label switch
         {
+            "skill type" => "技能类型",
+            "potency" => "威力",
+            "potency values" => "威力数值",
             "level" => "等级",
             "cast time" => "咏唱时间",
             "recast time" => "复唱时间",
@@ -644,6 +663,190 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
         return value.Any(c => c >= '\u3400' && c <= '\u9FFF');
     }
 
+
+    private async Task<string> TranslateWithBestAttemptAsync(
+        object translator,
+        string text,
+        string targetLanguage,
+        string context,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var attempts = new List<(string Text, string Source, string Target, string Context)>
+        {
+            (text, "English", targetLanguage, context),
+            (text, "en", targetLanguage, context),
+        };
+
+        var humanTarget = HumanizeTargetLanguage(targetLanguage);
+        if (!string.Equals(humanTarget, targetLanguage, StringComparison.OrdinalIgnoreCase))
+        {
+            attempts.Add((text, "English", humanTarget, context));
+            attempts.Add((text, "en", humanTarget, context));
+        }
+
+        var codeTarget = CodeTargetLanguage(targetLanguage);
+        if (!string.Equals(codeTarget, targetLanguage, StringComparison.OrdinalIgnoreCase))
+        {
+            attempts.Add((text, "English", codeTarget, context));
+            attempts.Add((text, "en", codeTarget, context));
+        }
+
+        // Last resort for backends that ignore the source/target parameters from this
+        // reflection call path. This is especially useful for OpenAI-compatible providers.
+        // We only use instruction wrapping if the normal calls do not produce CJK text.
+        var instructionWrapped = BuildInstructionWrappedText(text, targetLanguage, context);
+        attempts.Add((instructionWrapped, "English", targetLanguage, context + ".InstructionWrapped"));
+        attempts.Add((instructionWrapped, "en", humanTarget, context + ".InstructionWrapped"));
+
+        var best = string.Empty;
+        foreach (var attempt in attempts)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            string candidate;
+            try
+            {
+                candidate = await this.TranslateWithServiceAsync(
+                    translator,
+                    attempt.Text,
+                    attempt.Source,
+                    attempt.Target,
+                    attempt.Context,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                this.log.Debug($"[CN Tooltip Overlay] Translation attempt failed ({attempt.Source}->{attempt.Target}, {attempt.Context}): {ex.Message}");
+                continue;
+            }
+
+            candidate = ExtractInstructionWrappedResult(candidate);
+            candidate = CleanTranslatedOutput(candidate);
+            if (string.IsNullOrWhiteSpace(candidate))
+            {
+                continue;
+            }
+
+            if (IsBetterTranslationCandidate(text, candidate, best, targetLanguage))
+            {
+                best = candidate;
+            }
+
+            if (!LooksUntranslated(text, candidate, targetLanguage))
+            {
+                return candidate;
+            }
+        }
+
+        return best;
+    }
+
+    private static bool IsBetterTranslationCandidate(string source, string candidate, string currentBest, string targetLanguage)
+    {
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(currentBest))
+        {
+            return true;
+        }
+
+        if (IsChineseTarget(targetLanguage))
+        {
+            var candidateCjk = candidate.Count(c => c >= '\u3400' && c <= '\u9FFF');
+            var bestCjk = currentBest.Count(c => c >= '\u3400' && c <= '\u9FFF');
+            if (candidateCjk != bestCjk)
+            {
+                return candidateCjk > bestCjk;
+            }
+
+            var candidateLatin = candidate.Count(c => (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'));
+            var bestLatin = currentBest.Count(c => (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'));
+            if (candidateLatin != bestLatin)
+            {
+                return candidateLatin < bestLatin;
+            }
+        }
+
+        // Prefer candidates that keep roughly the same numeric information.
+        var sourceNums = ExtractNumericTokens(source).Distinct(StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
+        var candidateNums = ExtractNumericTokens(candidate).Distinct(StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
+        var bestNums = ExtractNumericTokens(currentBest).Distinct(StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
+        var candidateKept = sourceNums.Count(n => candidateNums.Contains(n));
+        var bestKept = sourceNums.Count(n => bestNums.Contains(n));
+        if (candidateKept != bestKept)
+        {
+            return candidateKept > bestKept;
+        }
+
+        return candidate.Length > currentBest.Length;
+    }
+
+    private static string HumanizeTargetLanguage(string targetLanguage)
+    {
+        if (IsChineseTarget(targetLanguage))
+        {
+            if (targetLanguage.Contains("tw", StringComparison.OrdinalIgnoreCase) ||
+                targetLanguage.Contains("traditional", StringComparison.OrdinalIgnoreCase) ||
+                targetLanguage.Contains("繁", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Traditional Chinese";
+            }
+
+            return "Simplified Chinese";
+        }
+
+        return targetLanguage;
+    }
+
+    private static string CodeTargetLanguage(string targetLanguage)
+    {
+        if (IsChineseTarget(targetLanguage))
+        {
+            if (targetLanguage.Contains("tw", StringComparison.OrdinalIgnoreCase) ||
+                targetLanguage.Contains("traditional", StringComparison.OrdinalIgnoreCase) ||
+                targetLanguage.Contains("繁", StringComparison.OrdinalIgnoreCase))
+            {
+                return "zh-TW";
+            }
+
+            return "zh-CN";
+        }
+
+        return targetLanguage;
+    }
+
+    private static string BuildInstructionWrappedText(string text, string targetLanguage, string context)
+    {
+        var humanTarget = HumanizeTargetLanguage(targetLanguage);
+        return $"Translate the following FINAL FANTASY XIV tooltip text into {humanTarget}. " +
+               "Keep all numbers, percentages, cooldowns, potency values, ranges, line breaks, and symbols. " +
+               "Do not explain. Return only the translation between <translation> and </translation>. " +
+               "Translate action names and descriptions.\n" +
+               $"Context: {context}\n" +
+               "<translation>\n" +
+               text.Trim() +
+               "\n</translation>";
+    }
+
+    private static string ExtractInstructionWrappedResult(string candidate)
+    {
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return string.Empty;
+        }
+
+        var match = Regex.Match(candidate, @"<translation>\s*(?<body>.*?)\s*</translation>", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+        return match.Success ? match.Groups["body"].Value.Trim() : candidate;
+    }
+
     private async Task<string> TranslateWithServiceAsync(
         object translator,
         string text,
@@ -801,13 +1004,8 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
         var includeOriginal = this.ReadConfigBool("TooltipOverlayShowOriginal", TooltipOverlayConfigDefaults.TooltipOverlayShowOriginal);
 
         var mouse = ImGui.GetMousePos();
-        var pos = mouse + new Vector2(28, 24);
         var viewport = ImGui.GetMainViewport();
-        var workMax = viewport.WorkPos + viewport.WorkSize;
-        if (pos.X + maxWidth > workMax.X)
-        {
-            pos.X = Math.Max(viewport.WorkPos.X + 16, mouse.X - maxWidth - 24);
-        }
+        var pos = this.ClampOverlayInitialPosition(mouse + new Vector2(28, 24), mouse, viewport.WorkPos, viewport.WorkSize, maxWidth);
 
         ImGui.SetNextWindowPos(pos, ImGuiCond.Always);
         ImGui.SetNextWindowBgAlpha(bgAlpha);
@@ -853,8 +1051,71 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
             this.DrawWrapped(payload.OriginalBody, fallback: string.Empty, strong: false);
         }
 
+        this.ClampCurrentOverlayWindowToViewport(viewport.WorkPos, viewport.WorkSize);
+
         ImGui.SetWindowFontScale(oldScale);
         ImGui.End();
+    }
+
+
+    private Vector2 ClampOverlayInitialPosition(Vector2 desired, Vector2 mouse, Vector2 workPosRaw, Vector2 workSizeRaw, float maxWidth)
+    {
+        var margin = 16f;
+        var workMin = workPosRaw + new Vector2(margin, margin);
+        var workMax = workPosRaw + workSizeRaw - new Vector2(margin, margin);
+
+        var pos = desired;
+        if (pos.X + maxWidth > workMax.X)
+        {
+            pos.X = Math.Max(workMin.X, mouse.X - maxWidth - 24f);
+        }
+
+        // Initial vertical clamp uses a conservative estimated height. The final exact
+        // clamp runs after ImGui has measured the auto-resized window.
+        var estimatedHeight = Math.Min(520f, Math.Max(160f, workSizeRaw.Y * 0.45f));
+        if (pos.Y + estimatedHeight > workMax.Y)
+        {
+            pos.Y = Math.Max(workMin.Y, mouse.Y - estimatedHeight - 24f);
+        }
+
+        pos.X = Math.Clamp(pos.X, workMin.X, Math.Max(workMin.X, workMax.X - 120f));
+        pos.Y = Math.Clamp(pos.Y, workMin.Y, Math.Max(workMin.Y, workMax.Y - 80f));
+        return pos;
+    }
+
+    private void ClampCurrentOverlayWindowToViewport(Vector2 workPosRaw, Vector2 workSizeRaw)
+    {
+        var margin = 16f;
+        var workMin = workPosRaw + new Vector2(margin, margin);
+        var workMax = workPosRaw + workSizeRaw - new Vector2(margin, margin);
+        var pos = ImGui.GetWindowPos();
+        var size = ImGui.GetWindowSize();
+
+        var next = pos;
+        if (next.X + size.X > workMax.X)
+        {
+            next.X = workMax.X - size.X;
+        }
+
+        if (next.Y + size.Y > workMax.Y)
+        {
+            next.Y = workMax.Y - size.Y;
+        }
+
+        if (next.X < workMin.X)
+        {
+            next.X = workMin.X;
+        }
+
+        if (next.Y < workMin.Y)
+        {
+            next.Y = workMin.Y;
+        }
+
+        if ((next - pos).LengthSquared() > 0.25f)
+        {
+            ImGui.SetWindowPos(next, ImGuiCond.Always);
+        }
     }
 
     private void DrawWrapped(string text, string fallback, bool strong)
