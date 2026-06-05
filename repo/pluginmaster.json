@@ -4,7 +4,7 @@
     "Name": "Echoglossian CN",
     "Punchline": "Mandarin-focused fork of Echoglossian for dialogue and in-game text translation.",
     "Description": "Realtime game text translator preset/fork for Mandarin Chinese users on global FFXIV clients. This does not include official Chinese-region text assets.",
-    "InternalName": "EchoglossianCN",
+    "InternalName": "latest",
     "AssemblyVersion": "REPLACE_WITH_BUILT_ASSEMBLY_VERSION",
     "TestingAssemblyVersion": null,
     "RepoUrl": "https://github.com/Kolba1t/EchoglossianCN",
