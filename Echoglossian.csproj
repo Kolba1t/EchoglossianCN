@@ -1,4 +1,4 @@
-﻿<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup Label="MultilingualAppToolkit">
     <MultilingualAppToolkitVersion>4.0</MultilingualAppToolkitVersion>
     <MultilingualFallbackLanguage>en</MultilingualFallbackLanguage>
@@ -22,9 +22,9 @@
     <!-- Release pattern: 4.yy01.mmdd.HHmm. Keep year, patch, and revision manual so release numbering only changes when explicitly updated. -->
     <VersionPatch Condition="'$(VersionPatch)' == ''">0531</VersionPatch>
     <VersionRevision Condition="'$(VersionRevision)' == ''">0115</VersionRevision>
-    <Version>4.2601.531.116</Version>
-    <AssemblyVersion>4.2601.531.116</AssemblyVersion>
-    <FileVersion>4.2601.531.116</FileVersion>
+    <Version>4.2601.531.117</Version>
+    <AssemblyVersion>4.2601.531.117</AssemblyVersion>
+    <FileVersion>4.2601.531.117</FileVersion>
     <InformationalVersion>$(Version)</InformationalVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
@@ -362,5 +362,6 @@
   </ItemGroup>
 
 </Project>
+
 
 

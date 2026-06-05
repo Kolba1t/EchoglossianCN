@@ -17,4 +17,8 @@ internal static class TooltipOverlayConfigDefaults
     public const int TooltipOverlayMaxWidth = 560;
     public const float TooltipOverlayFontScale = 1.0f;
     public const float TooltipOverlayBgAlpha = 0.96f;
+
+    // If Dalamud keeps reporting the last hovered action after the cursor has left it,
+    // hide the overlay once the mouse drifts this far from the point where the hover began.
+    public const int TooltipOverlayMaxMouseDriftPixels = 96;
 }

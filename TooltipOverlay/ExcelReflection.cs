@@ -2,6 +2,7 @@
 // Licensed under the same license terms as your Echoglossian fork.
 
 using System.Reflection;
+using System.Text.RegularExpressions;
 
 namespace Echoglossian.TooltipOverlay;
 
@@ -56,14 +57,54 @@ internal static class ExcelReflection
 
     public static string ExtractTextProperty(object row, string propertyName)
     {
-        var prop = row.GetType().GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public);
-        if (prop == null)
+        var value = TryGetPropertyValue(row, propertyName);
+        return ToPlainText(value);
+    }
+
+    public static object? TryGetPropertyValue(object? row, string propertyName)
+    {
+        if (row == null || string.IsNullOrWhiteSpace(propertyName))
         {
-            return string.Empty;
+            return null;
         }
 
-        var value = prop.GetValue(row);
-        return ToPlainText(value);
+        var prop = row.GetType().GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public);
+        return prop?.GetValue(row);
+    }
+
+    public static bool TryReadNumber(object? row, string propertyName, out decimal value)
+    {
+        value = 0;
+        var raw = TryGetPropertyValue(row, propertyName);
+        if (raw == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            value = Convert.ToDecimal(raw);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static string ExtractBestTextProperty(object row, params string[] propertyNames)
+    {
+        var best = string.Empty;
+        foreach (var propertyName in propertyNames)
+        {
+            var candidate = ExtractTextProperty(row, propertyName);
+            if (IsRicherText(candidate, best))
+            {
+                best = candidate;
+            }
+        }
+
+        return best;
     }
 
     public static bool LooksLikeMissingRow(object? row, uint expectedRowId)
@@ -88,6 +129,29 @@ internal static class ExcelReflection
         {
             return false;
         }
+    }
+
+    public static string CleanGameText(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var text = value.Replace("\r\n", "\n").Replace('\r', '\n');
+
+        // Strip most private-use UI glyphs/icons before sending text to the translator.
+        // FFXIV uses these heavily in tooltips. They can cause Google/OpenAI to return
+        // unchanged or malformed output, and the overlay already labels the source kind.
+        text = Regex.Replace(text, "[\\uE000-\\uF8FF]", string.Empty);
+
+        // Remove common generated markup while keeping the visible text/numbers.
+        text = Regex.Replace(text, @"<[^>]+>", string.Empty);
+        text = Regex.Replace(text, @"\\s*\\n\\s*", "\n");
+        text = Regex.Replace(text, @"[ \\t]{2,}", " ");
+        text = Regex.Replace(text, @"\\n{3,}", "\n\n");
+
+        return text.Trim();
     }
 
     private static object? InvokeRowGetter(MethodInfo method, object sheet, uint rowId)
@@ -124,15 +188,62 @@ internal static class ExcelReflection
             return string.Empty;
         }
 
+        var candidates = new List<string>();
+
         // Lumina SeString-like types usually expose ExtractText(). Prefer it if present.
         var extractText = value.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public)
             .FirstOrDefault(m => m.Name == "ExtractText" && m.GetParameters().Length == 0);
         if (extractText != null)
         {
-            return (extractText.Invoke(value, Array.Empty<object?>()) as string ?? string.Empty).Trim();
+            candidates.Add(extractText.Invoke(value, Array.Empty<object?>()) as string ?? string.Empty);
         }
 
-        // Some generated values are wrappers around string with ToString() implemented.
-        return value.ToString()?.Trim() ?? string.Empty;
+        // Some SeString payloads render more numerics in ToString() than ExtractText().
+        // Keep ToString() as a fallback, but reject obvious type-name dumps.
+        candidates.Add(value.ToString() ?? string.Empty);
+
+        var best = string.Empty;
+        foreach (var candidate in candidates.Select(CleanGameText))
+        {
+            if (IsRicherText(candidate, best))
+            {
+                best = candidate;
+            }
+        }
+
+        return best;
+    }
+
+    private static bool IsRicherText(string candidate, string current)
+    {
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return false;
+        }
+
+        if (candidate.Contains("Lumina.", StringComparison.Ordinal) ||
+            candidate.Contains("SeString", StringComparison.Ordinal) ||
+            candidate.Contains("ExcelPage", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(current))
+        {
+            return true;
+        }
+
+        var candidateScore = TextScore(candidate);
+        var currentScore = TextScore(current);
+        return candidateScore > currentScore;
+    }
+
+    private static int TextScore(string text)
+    {
+        // Reward digits strongly because missing tooltip numbers were the main v5 bug.
+        var letters = text.Count(char.IsLetter);
+        var digits = text.Count(char.IsDigit);
+        var lines = text.Count(c => c == '\n');
+        return letters + (digits * 6) + (lines * 8) + Math.Min(text.Length / 8, 80);
     }
 }

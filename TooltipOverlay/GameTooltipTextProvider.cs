@@ -1,6 +1,7 @@
 // Copyright (c) fork author. Based on Echoglossian runtime patterns.
 // Licensed under the same license terms as your Echoglossian fork.
 
+using System.Text;
 using Dalamud.Game;
 using Dalamud.Game.Gui;
 using Dalamud.Plugin.Services;
@@ -35,9 +36,9 @@ internal sealed class GameTooltipTextProvider
             {
                 TooltipLookupKind.Item => this.BuildFromSheet<Item>(key, "Name", "Description"),
                 TooltipLookupKind.Action => this.BuildActionPayload(key),
-                TooltipLookupKind.CraftingAction => this.BuildFromSheet<CraftAction>(key, "Name", "Description"),
+                TooltipLookupKind.CraftingAction => this.BuildCraftActionPayload(key),
                 TooltipLookupKind.GeneralAction => this.BuildFromSheet<GeneralAction>(key, "Name", "Description"),
-                TooltipLookupKind.Trait => this.BuildFromSheet<LuminaTrait>(key, "Name", "Description"),
+                TooltipLookupKind.Trait => this.BuildTraitPayload(key),
                 TooltipLookupKind.UnknownActionLike => this.BuildActionPayload(key),
                 _ => null,
             };
@@ -87,27 +88,72 @@ internal sealed class GameTooltipTextProvider
 
     private TooltipPayload? BuildActionPayload(TooltipLookupKey key)
     {
-        var payload = this.BuildFromSheet<LuminaAction>(key, "Name", "Description");
+        var sheet = this.dataManager.GetExcelSheet<LuminaAction>(ClientLanguage.English);
+        var row = ExcelReflection.GetRowObject(sheet, key.RowId);
+        if (row == null || ExcelReflection.LooksLikeMissingRow(row, key.RowId))
+        {
+            return null;
+        }
+
+        var title = ExcelReflection.ExtractBestTextProperty(row, "Name");
+        var body = ExcelReflection.ExtractBestTextProperty(row, "Description");
+
+        // Many newer action tooltip lines live in ActionTransient or carry more resolved
+        // numbers there than in Action.Description. Merge rather than replacing so we keep
+        // both descriptive text and numeric lines when one source is incomplete.
+        var transient = this.TryReadSheetText<LuminaActionTransient>(key.RowId, "Description", "DescriptionShort", "Text", "Tooltip");
+        body = MergeTooltipSections(body, transient);
+
+        var supplemental = this.BuildActionSupplement(row);
+        body = MergeTooltipSections(body, supplemental);
+
+        if (string.IsNullOrWhiteSpace(title) && string.IsNullOrWhiteSpace(body))
+        {
+            return null;
+        }
+
+        return new TooltipPayload(key, title, body, string.Empty, string.Empty);
+    }
+
+    private TooltipPayload? BuildCraftActionPayload(TooltipLookupKey key)
+    {
+        var payload = this.BuildFromSheet<CraftAction>(key, "Name", "Description");
         if (payload == null)
         {
             return null;
         }
 
-        // In many current sheets the rendered action tooltip body is richer than
-        // Action.Description, and some useful action text is stored in ActionTransient.
-        // This is still not a perfect clone of the native tooltip, but it recovers many
-        // skill descriptions that the first overlay build showed as name-only.
-        var transientDescription = this.TryReadSheetText<LuminaActionTransient>(key.RowId, "Description");
-        if (!string.IsNullOrWhiteSpace(transientDescription) &&
-            transientDescription.Length > payload.OriginalBody.Length)
+        var sheet = this.dataManager.GetExcelSheet<CraftAction>(ClientLanguage.English);
+        var row = ExcelReflection.GetRowObject(sheet, key.RowId);
+        if (row != null && !ExcelReflection.LooksLikeMissingRow(row, key.RowId))
         {
-            payload = payload with { OriginalBody = transientDescription };
+            var supplemental = this.BuildGenericSupplement(row);
+            payload = payload with { OriginalBody = MergeTooltipSections(payload.OriginalBody, supplemental) };
         }
 
         return payload;
     }
 
-    private string TryReadSheetText<T>(uint rowId, string propertyName)
+    private TooltipPayload? BuildTraitPayload(TooltipLookupKey key)
+    {
+        var payload = this.BuildFromSheet<LuminaTrait>(key, "Name", "Description");
+        if (payload == null)
+        {
+            return null;
+        }
+
+        var sheet = this.dataManager.GetExcelSheet<LuminaTrait>(ClientLanguage.English);
+        var row = ExcelReflection.GetRowObject(sheet, key.RowId);
+        if (row != null && !ExcelReflection.LooksLikeMissingRow(row, key.RowId))
+        {
+            var supplemental = this.BuildGenericSupplement(row);
+            payload = payload with { OriginalBody = MergeTooltipSections(payload.OriginalBody, supplemental) };
+        }
+
+        return payload;
+    }
+
+    private string TryReadSheetText<T>(uint rowId, params string[] propertyNames)
         where T : struct, Lumina.Excel.IExcelRow<T>
     {
         try
@@ -119,11 +165,11 @@ internal sealed class GameTooltipTextProvider
                 return string.Empty;
             }
 
-            return ExcelReflection.ExtractTextProperty(row, propertyName);
+            return ExcelReflection.ExtractBestTextProperty(row, propertyNames);
         }
         catch (Exception ex)
         {
-            this.log.Debug($"[CN Tooltip Overlay] Failed to read {typeof(T).Name}.{propertyName} row {rowId}: {ex.Message}");
+            this.log.Debug($"[CN Tooltip Overlay] Failed to read {typeof(T).Name} row {rowId}: {ex.Message}");
             return string.Empty;
         }
     }
@@ -141,8 +187,8 @@ internal sealed class GameTooltipTextProvider
             return null;
         }
 
-        var title = ExcelReflection.ExtractTextProperty(row, titleProperty);
-        var body = ExcelReflection.ExtractTextProperty(row, bodyProperty);
+        var title = ExcelReflection.ExtractBestTextProperty(row, titleProperty);
+        var body = ExcelReflection.ExtractBestTextProperty(row, bodyProperty);
 
         if (string.IsNullOrWhiteSpace(title) && string.IsNullOrWhiteSpace(body))
         {
@@ -155,5 +201,156 @@ internal sealed class GameTooltipTextProvider
         }
 
         return new TooltipPayload(key, title, body, string.Empty, string.Empty);
+    }
+
+    private string BuildActionSupplement(object row)
+    {
+        var lines = new List<string>();
+
+        AddLevel(lines, row);
+        AddHundredMs(lines, row, "Cast100ms", "Cast time", zeroAsInstant: true);
+        AddHundredMs(lines, row, "Recast100ms", "Recast time", zeroAsInstant: false);
+        AddNumber(lines, row, "Range", "Range", skipZero: true);
+        AddNumber(lines, row, "EffectRange", "Radius", skipZero: true);
+        AddNumber(lines, row, "XAxisModifier", "Width/axis modifier", skipZero: true);
+        AddNumber(lines, row, "MaxCharges", "Maximum charges", skipZero: true);
+        AddCost(lines, row);
+
+        return lines.Count == 0
+            ? string.Empty
+            : "Action data:\n" + string.Join("\n", lines);
+    }
+
+    private string BuildGenericSupplement(object row)
+    {
+        var lines = new List<string>();
+        AddLevel(lines, row);
+        AddNumber(lines, row, "Cost", "Cost", skipZero: true);
+        AddNumber(lines, row, "CP", "CP", skipZero: true);
+        AddNumber(lines, row, "GP", "GP", skipZero: true);
+        return lines.Count == 0
+            ? string.Empty
+            : "Additional data:\n" + string.Join("\n", lines);
+    }
+
+    private static void AddLevel(ICollection<string> lines, object row)
+    {
+        if (ExcelReflection.TryReadNumber(row, "ClassJobLevel", out var level) && level > 0)
+        {
+            lines.Add($"Level: {FormatNumber(level)}");
+        }
+    }
+
+    private static void AddCost(ICollection<string> lines, object row)
+    {
+        if (ExcelReflection.TryReadNumber(row, "PrimaryCostValue", out var primaryCost) && primaryCost > 0)
+        {
+            var label = "Primary cost";
+            var type = ExcelReflection.TryGetPropertyValue(row, "PrimaryCostType")?.ToString();
+            if (!string.IsNullOrWhiteSpace(type) && type != "0")
+            {
+                label = $"Primary cost ({type})";
+            }
+
+            lines.Add($"{label}: {FormatNumber(primaryCost)}");
+        }
+
+        if (ExcelReflection.TryReadNumber(row, "SecondaryCostValue", out var secondaryCost) && secondaryCost > 0)
+        {
+            var label = "Secondary cost";
+            var type = ExcelReflection.TryGetPropertyValue(row, "SecondaryCostType")?.ToString();
+            if (!string.IsNullOrWhiteSpace(type) && type != "0")
+            {
+                label = $"Secondary cost ({type})";
+            }
+
+            lines.Add($"{label}: {FormatNumber(secondaryCost)}");
+        }
+    }
+
+    private static void AddHundredMs(ICollection<string> lines, object row, string propertyName, string label, bool zeroAsInstant)
+    {
+        if (!ExcelReflection.TryReadNumber(row, propertyName, out var value))
+        {
+            return;
+        }
+
+        if (value <= 0)
+        {
+            if (zeroAsInstant)
+            {
+                lines.Add($"{label}: Instant");
+            }
+
+            return;
+        }
+
+        lines.Add($"{label}: {FormatNumber(value / 10m)}s");
+    }
+
+    private static void AddNumber(ICollection<string> lines, object row, string propertyName, string label, bool skipZero)
+    {
+        if (!ExcelReflection.TryReadNumber(row, propertyName, out var value))
+        {
+            return;
+        }
+
+        if (skipZero && value == 0)
+        {
+            return;
+        }
+
+        lines.Add($"{label}: {FormatNumber(value)}");
+    }
+
+    private static string MergeTooltipSections(params string[] sections)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var output = new StringBuilder();
+
+        foreach (var section in sections)
+        {
+            var clean = ExcelReflection.CleanGameText(section);
+            if (string.IsNullOrWhiteSpace(clean))
+            {
+                continue;
+            }
+
+            foreach (var rawLine in clean.Split('\n'))
+            {
+                var line = rawLine.Trim();
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                var key = NormalizeForDedupe(line);
+                if (!seen.Add(key))
+                {
+                    continue;
+                }
+
+                if (output.Length > 0)
+                {
+                    output.AppendLine();
+                }
+
+                output.Append(line);
+            }
+        }
+
+        return output.ToString();
+    }
+
+    private static string NormalizeForDedupe(string line)
+    {
+        return new string(line.Where(c => !char.IsWhiteSpace(c)).ToArray());
+    }
+
+    private static string FormatNumber(decimal number)
+    {
+        return number % 1 == 0
+            ? number.ToString("0")
+            : number.ToString("0.##");
     }
 }

@@ -6,6 +6,7 @@ using Dalamud.Game.Gui;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using System.Numerics;
+using System.Text.RegularExpressions;
 
 namespace Echoglossian.TooltipOverlay;
 
@@ -24,6 +25,9 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
 
     private TooltipLookupKey currentKey = TooltipLookupKey.None;
     private DateTime hoverStartedUtc = DateTime.MinValue;
+    private Vector2 hoverAnchorMouse = Vector2.Zero;
+    private string? suppressedCacheKey;
+    private Vector2 suppressedAnchorMouse = Vector2.Zero;
     private CancellationTokenSource? currentTranslationCts;
     private Task? currentTranslationTask;
     private bool started;
@@ -109,6 +113,12 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
             return;
         }
 
+        if (this.ShouldClearBecauseCursorLeftHover())
+        {
+            this.ClearCurrentHover(suppressUntilMouseReturns: true);
+            return;
+        }
+
         var delayMs = this.ReadConfigInt("TooltipOverlayDelayMs", TooltipOverlayConfigDefaults.TooltipOverlayDelayMs, 0, 3000);
         if ((DateTime.UtcNow - this.hoverStartedUtc).TotalMilliseconds < delayMs)
         {
@@ -142,6 +152,16 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
     private void UpdateCurrentHover(TooltipLookupKey? forceKey = null)
     {
         var nextKey = forceKey ?? this.ResolveCurrentHover();
+
+        if (this.IsSuppressedByMouseDrift(nextKey))
+        {
+            nextKey = TooltipLookupKey.None;
+        }
+        else if (!nextKey.IsNone && this.suppressedCacheKey != null && nextKey.CacheKey != this.suppressedCacheKey)
+        {
+            this.suppressedCacheKey = null;
+        }
+
         if (nextKey.Equals(this.currentKey))
         {
             return;
@@ -149,6 +169,77 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
 
         this.currentKey = nextKey;
         this.hoverStartedUtc = DateTime.UtcNow;
+        this.hoverAnchorMouse = ImGui.GetMousePos();
+        this.pendingCacheKey = null;
+        this.CancelPendingTranslation();
+    }
+
+    private bool ShouldClearBecauseCursorLeftHover()
+    {
+        if (this.currentKey.IsNone)
+        {
+            return false;
+        }
+
+        var maxDrift = this.ReadConfigInt(
+            "TooltipOverlayMaxMouseDriftPixels",
+            TooltipOverlayConfigDefaults.TooltipOverlayMaxMouseDriftPixels,
+            16,
+            500);
+
+        if (maxDrift <= 0)
+        {
+            return false;
+        }
+
+        var mouse = ImGui.GetMousePos();
+        var delta = mouse - this.hoverAnchorMouse;
+        if (delta.LengthSquared() <= maxDrift * maxDrift)
+        {
+            return false;
+        }
+
+        // If Dalamud reports a genuinely new hovered thing, UpdateCurrentHover will pick it up.
+        // If it keeps returning the exact same key while the mouse has clearly left the icon/item,
+        // treat that as stale and hide the overlay.
+        var resolvedNow = this.ResolveCurrentHover();
+        return resolvedNow.IsNone || resolvedNow.Equals(this.currentKey);
+    }
+
+    private bool IsSuppressedByMouseDrift(TooltipLookupKey nextKey)
+    {
+        if (nextKey.IsNone || this.suppressedCacheKey == null || nextKey.CacheKey != this.suppressedCacheKey)
+        {
+            return false;
+        }
+
+        var maxDrift = this.ReadConfigInt(
+            "TooltipOverlayMaxMouseDriftPixels",
+            TooltipOverlayConfigDefaults.TooltipOverlayMaxMouseDriftPixels,
+            16,
+            500);
+
+        var mouse = ImGui.GetMousePos();
+        var delta = mouse - this.suppressedAnchorMouse;
+        if (delta.LengthSquared() <= maxDrift * maxDrift)
+        {
+            this.suppressedCacheKey = null;
+            return false;
+        }
+
+        return true;
+    }
+
+    private void ClearCurrentHover(bool suppressUntilMouseReturns)
+    {
+        if (suppressUntilMouseReturns && !this.currentKey.IsNone)
+        {
+            this.suppressedCacheKey = this.currentKey.CacheKey;
+            this.suppressedAnchorMouse = this.hoverAnchorMouse;
+        }
+
+        this.currentKey = TooltipLookupKey.None;
+        this.hoverStartedUtc = DateTime.MinValue;
         this.pendingCacheKey = null;
         this.CancelPendingTranslation();
     }
@@ -232,17 +323,28 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            var translatedBody = string.IsNullOrWhiteSpace(source.OriginalBody)
+            var bodyForTranslation = PrepareTextForTranslation(source.OriginalBody);
+            var translatedBody = string.IsNullOrWhiteSpace(bodyForTranslation)
                 ? string.Empty
                 : await this.TranslateWithServiceAsync(
                     translator,
-                    source.OriginalBody,
+                    bodyForTranslation,
                     "English",
                     targetLanguage,
-                    "TooltipOverlay.Body",
+                    "TooltipOverlay.Body.PreserveAllNumbersAndGameTerms",
                     cancellationToken).ConfigureAwait(false);
 
             cancellationToken.ThrowIfCancellationRequested();
+
+            translatedBody = CleanTranslatedOutput(translatedBody);
+            translatedBody = RestoreMissingNumericTokens(bodyForTranslation, translatedBody);
+
+            // If the service returns unchanged English for a non-English target, keep a
+            // visible note rather than silently showing the user an untranslated overlay.
+            if (!string.IsNullOrWhiteSpace(bodyForTranslation) && LooksUntranslated(bodyForTranslation, translatedBody, targetLanguage))
+            {
+                translatedBody = $"[未翻译 / untranslated]\n{bodyForTranslation}";
+            }
 
             this.CachePayload(source with
             {
@@ -273,6 +375,123 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
         }
     }
 
+
+    private static string PrepareTextForTranslation(string text)
+    {
+        var clean = ExcelReflection.CleanGameText(text);
+        if (string.IsNullOrWhiteSpace(clean))
+        {
+            return string.Empty;
+        }
+
+        // Do not prefix instructions into the text itself: non-LLM backends such as
+        // Google can translate the instruction literally. Numeric preservation is handled
+        // by the context string plus RestoreMissingNumericTokens().
+        return clean;
+    }
+
+    private static string CleanTranslatedOutput(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var clean = text.Replace("\r\n", "\n").Replace('\r', '\n');
+        clean = Regex.Replace(clean, @"^\s*[-—]{3,}\s*", string.Empty, RegexOptions.Multiline);
+        clean = Regex.Replace(clean, @"\n{3,}", "\n\n");
+        return clean.Trim();
+    }
+
+    private static string RestoreMissingNumericTokens(string source, string translated)
+    {
+        if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(translated))
+        {
+            return translated;
+        }
+
+        var sourceCore = StripTranslationInstruction(source);
+        var sourceTokens = ExtractNumericTokens(sourceCore).Distinct(StringComparer.Ordinal).ToList();
+        if (sourceTokens.Count == 0)
+        {
+            return translated;
+        }
+
+        var translatedTokens = ExtractNumericTokens(translated).ToHashSet(StringComparer.Ordinal);
+        var missing = sourceTokens.Where(t => !translatedTokens.Contains(t)).Take(16).ToList();
+        if (missing.Count == 0)
+        {
+            return translated;
+        }
+
+        return translated.TrimEnd() + "\n\n数值保留: " + string.Join(", ", missing);
+    }
+
+    private static IEnumerable<string> ExtractNumericTokens(string text)
+    {
+        // Handles potency/cooldown/range-like values: 300, 2.50s, 10%, 1,000, 15-yalm.
+        foreach (Match match in Regex.Matches(text, @"(?<![A-Za-z])\d{1,3}(?:,\d{3})*(?:\.\d+)?(?:\s?[%s秒秒钟]|\s?yalms?|\s?yalm)?|(?<![A-Za-z])\d+(?:\.\d+)?(?:\s?[%s秒秒钟]|\s?yalms?|\s?yalm)?", RegexOptions.IgnoreCase))
+        {
+            var value = Regex.Replace(match.Value.Trim(), @"\s+", string.Empty);
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                yield return value;
+            }
+        }
+    }
+
+    private static bool LooksUntranslated(string source, string translated, string targetLanguage)
+    {
+        if (string.IsNullOrWhiteSpace(translated))
+        {
+            return false;
+        }
+
+        if (!IsChineseTarget(targetLanguage))
+        {
+            return false;
+        }
+
+        if (ContainsCjk(translated))
+        {
+            return false;
+        }
+
+        var sourceCore = NormalizeForComparison(StripTranslationInstruction(source));
+        var translatedCore = NormalizeForComparison(translated);
+        if (string.IsNullOrWhiteSpace(sourceCore) || string.IsNullOrWhiteSpace(translatedCore))
+        {
+            return false;
+        }
+
+        return translatedCore.Contains(sourceCore, StringComparison.OrdinalIgnoreCase) ||
+               sourceCore.Contains(translatedCore, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string StripTranslationInstruction(string source)
+    {
+        var marker = "---\n";
+        var index = source.IndexOf(marker, StringComparison.Ordinal);
+        return index >= 0 ? source[(index + marker.Length)..] : source;
+    }
+
+    private static string NormalizeForComparison(string value)
+    {
+        return Regex.Replace(value, @"[^A-Za-z0-9]+", " ").Trim();
+    }
+
+    private static bool IsChineseTarget(string targetLanguage)
+    {
+        return targetLanguage.Contains("zh", StringComparison.OrdinalIgnoreCase) ||
+               targetLanguage.Contains("chinese", StringComparison.OrdinalIgnoreCase) ||
+               targetLanguage.Contains("中文", StringComparison.OrdinalIgnoreCase) ||
+               targetLanguage.Contains("Chinese", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ContainsCjk(string value)
+    {
+        return value.Any(c => c >= '\u3400' && c <= '\u9FFF');
+    }
 
     private async Task<string> TranslateWithServiceAsync(
         object translator,
@@ -420,6 +639,7 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
             ImGuiWindowFlags.AlwaysAutoResize |
             ImGuiWindowFlags.NoFocusOnAppearing |
             ImGuiWindowFlags.NoNav |
+            ImGuiWindowFlags.NoInputs |
             ImGuiWindowFlags.NoMove;
 
         if (!ImGui.Begin("###EchoglossianCNTooltipOverlay", flags))
