@@ -1,4 +1,4 @@
-[
+﻿[
   {
     "Author": "Kolba1t, based on lokinmodar/Echoglossian",
     "Name": "Echoglossian CN",
@@ -15,7 +15,7 @@
     "DownloadLinkInstall": "https://github.com/Kolba1t/EchoglossianCN/releases/download/v0.1.4/latest.zip",
     "DownloadLinkTesting": null,
     "DownloadLinkUpdate": "https://github.com/Kolba1t/EchoglossianCN/releases/download/v0.1.4/latest.zip",
-    "LastUpdate": 1780669494,
+    "LastUpdate": 1780669960,
     "Tags": ["translation", "Chinese", "Mandarin", "FFXIV", "Dalamud"]
   }
 ]
