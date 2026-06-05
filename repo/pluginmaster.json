@@ -5,7 +5,7 @@
     "Punchline": "Mandarin-focused fork of Echoglossian for dialogue and in-game text translation.",
     "Description": "Realtime game text translator preset/fork for Mandarin Chinese users on global FFXIV clients. This does not include official Chinese-region text assets.",
     "InternalName": "Echoglossian CN",
-    "AssemblyVersion": "REPLACE_WITH_BUILT_ASSEMBLY_VERSION",
+    "AssemblyVersion": "v0.1.0",
     "TestingAssemblyVersion": null,
     "RepoUrl": "https://github.com/Kolba1t/EchoglossianCN",
     "ApplicableVersion": "any",
@@ -15,7 +15,7 @@
     "DownloadLinkInstall": "https://github.com/Kolba1t/EchoglossianCN/releases/download/vX.Y.Z/latest.zip",
     "DownloadLinkTesting": null,
     "DownloadLinkUpdate": "https://github.com/Kolba1t/EchoglossianCN/releases/download/vX.Y.Z/latest.zip",
-    "LastUpdate": "1780663323"
+    "LastUpdate": "1780663690"
     "Tags": ["translation", "Chinese", "Mandarin", "FFXIV", "Dalamud"]	
   }
 ]
