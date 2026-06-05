@@ -593,9 +593,19 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
             return false;
         }
 
+        // For a Chinese target, a successful tooltip translation should contain at least
+        // some CJK characters. v0.1.3 only treated text as untranslated when it looked
+        // nearly identical to the source, which let English paraphrases get cached as if
+        // they were successful translations.
         if (ContainsCjk(translated))
         {
             return false;
+        }
+
+        var latinLetters = translated.Count(c => (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'));
+        if (latinLetters >= 8)
+        {
+            return true;
         }
 
         var sourceCore = NormalizeForComparison(StripTranslationInstruction(source));
@@ -642,10 +652,26 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
         string context,
         CancellationToken cancellationToken)
     {
-        var method = translator.GetType()
+        var methods = translator.GetType()
             .GetMethods()
             .Where(m => m.Name == "TranslateAsync")
-            .OrderByDescending(m => m.GetParameters().Length)
+            .ToArray();
+
+        // Echoglossian's runtime handlers call TranslationService.TranslateAsync(text,
+        // ClientLanguage.Humanize(), LangDict[LanguageInt].Code). Prefer that exact
+        // three-argument shape. v0.1.3 selected the overload with the most parameters,
+        // which can route through an overload not meant for normal translations and cache
+        // English output as if it were translated.
+        var method = methods.FirstOrDefault(m =>
+        {
+            var p = m.GetParameters();
+            return p.Length == 3 && p.All(x => x.ParameterType == typeof(string));
+        }) ?? methods.FirstOrDefault(m =>
+        {
+            var p = m.GetParameters();
+            return p.Length == 3 && p.Count(x => x.ParameterType == typeof(string)) >= 3;
+        }) ?? methods
+            .OrderBy(m => m.GetParameters().Length)
             .FirstOrDefault(m => m.GetParameters().Length >= 3);
 
         if (method == null)
@@ -654,55 +680,68 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
         }
 
         var parameters = method.GetParameters();
-        var args = new object?[parameters.Length];
-        for (var i = 0; i < parameters.Length; i++)
+        object?[] args;
+        if (parameters.Length == 3 && parameters.Count(x => x.ParameterType == typeof(string)) >= 3)
         {
-            var parameter = parameters[i];
-            var name = parameter.Name?.ToLowerInvariant() ?? string.Empty;
+            args = new object?[] { text, sourceLanguage, targetLanguage };
+        }
+        else
+        {
+            args = new object?[parameters.Length];
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                var parameter = parameters[i];
+                var name = parameter.Name?.ToLowerInvariant() ?? string.Empty;
 
-            if (i == 0 && parameter.ParameterType == typeof(string))
-            {
-                args[i] = text;
-            }
-            else if (parameter.ParameterType == typeof(CancellationToken))
-            {
-                args[i] = cancellationToken;
-            }
-            else if (parameter.ParameterType == typeof(string) && (name.Contains("source") || name.Contains("from") || name.Contains("origin")))
-            {
-                args[i] = sourceLanguage;
-            }
-            else if (parameter.ParameterType == typeof(string) && (name.Contains("target") || name.Contains("to") || name.Contains("dest")))
-            {
-                args[i] = targetLanguage;
-            }
-            else if (parameter.ParameterType == typeof(string) && name.Contains("context"))
-            {
-                args[i] = context;
-            }
-            else if (parameter.ParameterType == typeof(string) && i == 1)
-            {
-                args[i] = sourceLanguage;
-            }
-            else if (parameter.ParameterType == typeof(string) && i == 2)
-            {
-                args[i] = targetLanguage;
-            }
-            else if (parameter.HasDefaultValue)
-            {
-                args[i] = parameter.DefaultValue;
-            }
-            else if (parameter.ParameterType == typeof(string))
-            {
-                args[i] = context;
-            }
-            else
-            {
-                args[i] = parameter.ParameterType.IsValueType ? Activator.CreateInstance(parameter.ParameterType) : null;
+                if (i == 0 && parameter.ParameterType == typeof(string))
+                {
+                    args[i] = text;
+                }
+                else if (parameter.ParameterType == typeof(CancellationToken))
+                {
+                    args[i] = cancellationToken;
+                }
+                else if (parameter.ParameterType == typeof(string) && (name.Contains("source") || name.Contains("from") || name.Contains("origin")))
+                {
+                    args[i] = sourceLanguage;
+                }
+                else if (parameter.ParameterType == typeof(string) && (name.Contains("target") || name.Contains("to") || name.Contains("dest")))
+                {
+                    args[i] = targetLanguage;
+                }
+                else if (parameter.ParameterType == typeof(string) && name.Contains("context"))
+                {
+                    args[i] = context;
+                }
+                else if (parameter.ParameterType == typeof(string) && i == 1)
+                {
+                    args[i] = sourceLanguage;
+                }
+                else if (parameter.ParameterType == typeof(string) && i == 2)
+                {
+                    args[i] = targetLanguage;
+                }
+                else if (parameter.HasDefaultValue)
+                {
+                    args[i] = parameter.DefaultValue;
+                }
+                else if (parameter.ParameterType == typeof(string))
+                {
+                    args[i] = context;
+                }
+                else
+                {
+                    args[i] = parameter.ParameterType.IsValueType ? Activator.CreateInstance(parameter.ParameterType) : null;
+                }
             }
         }
 
         var result = method.Invoke(translator, args);
+        return await UnwrapTranslationResultAsync(result).ConfigureAwait(false);
+    }
+
+    private static async Task<string> UnwrapTranslationResultAsync(object? result)
+    {
         if (result == null)
         {
             return string.Empty;
