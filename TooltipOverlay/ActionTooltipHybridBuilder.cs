@@ -138,8 +138,41 @@ internal static class ActionTooltipHybridBuilder
         }
 
         clean = sb.ToString();
+        clean = StripNativeControlMarkers(clean);
         clean = Regex.Replace(clean, @"[═=]{2,}", " ");
         clean = Regex.Replace(clean, @"[ \t]{2,}", " ");
+        clean = Regex.Replace(clean, @"\s+([,.;:!?])", "$1");
+        clean = Regex.Replace(clean, @"\n{3,}", "\n\n");
+        return clean.Trim();
+    }
+
+    /// <summary>
+    /// The game's native tooltip text nodes can include formatting/icon/color payloads that
+    /// arrive from CStringPointer.ToString() as isolated ASCII marker tokens, most often
+    /// H and I. These are not real tooltip text. Remove only standalone marker tokens while
+    /// leaving normal words such as This, with, Hyperphantasia, etc. intact.
+    /// </summary>
+    private static string StripNativeControlMarkers(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var clean = text.Replace("\r\n", "\n").Replace('\r', '\n');
+
+        // Collapse runs like "I H", "H I H", and "H I H I" that appear where
+        // the native tooltip had colored text/icons.
+        clean = Regex.Replace(clean, @"(?<![A-Za-z0-9])(?:H|I)(?:\s+(?:H|I))+(?![A-Za-z0-9])", " ");
+
+        // Remove remaining isolated marker letters. This intentionally only matches full
+        // one-letter tokens, so it does not remove H/i from words like This or Hyperphantasia.
+        clean = Regex.Replace(clean, @"(?<![A-Za-z0-9])(?:H|I)(?![A-Za-z0-9])", " ");
+
+        // Clean up spacing left behind by removed markers.
+        clean = Regex.Replace(clean, @"[ \t]{2,}", " ");
+        clean = Regex.Replace(clean, @"\s+([,.;:!?])", "$1");
+        clean = Regex.Replace(clean, @"([(:])\s+", "$1");
         clean = Regex.Replace(clean, @"\n{3,}", "\n\n");
         return clean.Trim();
     }

@@ -335,11 +335,16 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
             translatedBody = LocalizeKnownEnglishLabels(translatedBody);
             translatedBody = RestoreMissingNumericTokens(bodyForTranslation, translatedBody);
 
-            // If the service still returns unchanged English for a non-English target, keep a
-            // visible note rather than silently showing the user an untranslated overlay.
+            // If the service still returns unchanged English for a non-English target, do not
+            // throw away partially-localized labels/stat lines. Earlier builds replaced the
+            // entire body with the original English block, which made fixes look worse than
+            // they were. Keep partial output visible and mark it as partial.
             if (!string.IsNullOrWhiteSpace(bodyForTranslation) && LooksUntranslated(bodyForTranslation, translatedBody, targetLanguage))
             {
-                translatedBody = $"[未翻译 / untranslated]\n{bodyForTranslation}";
+                var partial = LocalizeKnownEnglishLabels(CleanTranslatedOutput(translatedBody));
+                translatedBody = ContainsCjk(partial)
+                    ? $"[部分未翻译 / partial]\n{partial}"
+                    : $"[未翻译 / untranslated]\n{bodyForTranslation}";
             }
 
             this.CachePayload(source with
@@ -555,6 +560,11 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
 
         var clean = text.Replace("\r\n", "\n").Replace('\r', '\n');
         clean = Regex.Replace(clean, @"^\s*[-—]{3,}\s*", string.Empty, RegexOptions.Multiline);
+        // Remove native-tooltip marker leftovers if a backend echoed them back.
+        clean = Regex.Replace(clean, @"(?<![A-Za-z0-9])(?:H|I)(?:\s+(?:H|I))+(?![A-Za-z0-9])", " ");
+        clean = Regex.Replace(clean, @"(?<![A-Za-z0-9])(?:H|I)(?![A-Za-z0-9])", " ");
+        clean = Regex.Replace(clean, @"[ \t]{2,}", " ");
+        clean = Regex.Replace(clean, @"\s+([,.;:!?，。；：！？])", "$1");
         clean = Regex.Replace(clean, @"\n{3,}", "\n\n");
         return clean.Trim();
     }
