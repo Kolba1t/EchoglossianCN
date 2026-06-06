@@ -348,7 +348,7 @@ internal static class ActionTooltipHybridBuilder
             return null;
         }
 
-        var match = Regex.Match(text, @"\bpotency\s+(?:of\s+)?(?<value>\d{1,5})\b|\bPotency\s*:?\s*(?<value2>\d{1,5})\b", RegexOptions.IgnoreCase);
+        var match = Regex.Match(text, @"\bpotency\s+(?:of\s+)?(?<value>\d{1,3}(?:,\d{3})*|\d{1,5})\b|\bPotency\s*:?\s*(?<value2>\d{1,3}(?:,\d{3})*|\d{1,5})\b", RegexOptions.IgnoreCase);
         return match.Success ? FirstNonEmpty(match.Groups["value"].Value, match.Groups["value2"].Value) : null;
     }
 

@@ -744,6 +744,16 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
             return $"当 {CleanStatusName(activeCondition.Groups["status"].Value)} 激活时，{LocalizeKnownDescriptionFragments(activeCondition.Groups["effect"].Value)}。";
         }
 
+        var restoresPartyHp = Regex.Match(working, @"^Restores\s+HP\s+of\s+all\s+party\s+members\s+within\s+(?<range>\d+(?:\.\d+)?)\s+yalms?\s+of\s+target(?:\s+Cure)?(?:\s+Potency\s*:?\s*(?<potency>\d{1,3}(?:,\d{3})*|\d+))?\.?$", RegexOptions.IgnoreCase);
+        if (restoresPartyHp.Success)
+        {
+            var range = restoresPartyHp.Groups["range"].Value;
+            var potency = restoresPartyHp.Groups["potency"].Value;
+            return string.IsNullOrWhiteSpace(potency)
+                ? $"恢复目标周围{range}米内所有队员的HP。"
+                : $"恢复目标周围{range}米内所有队员的HP，恢复力为{potency}。";
+        }
+
         var cannotExecuted = Regex.Match(working, @"^Cannot\s+be\s+executed\s+while\s+under\s+the\s+effect\s+of\s+(?<status>.+?)\.?$", RegexOptions.IgnoreCase);
         if (cannotExecuted.Success)
         {
@@ -804,7 +814,7 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
             return $"只能在 {CleanStatusName(m.Groups["status"].Value)} 效果期间发动。";
         }
 
-        m = Regex.Match(working, @"^When\s+standing\s+within\s+the\s+bounds\s+of\s+(?<status>.+?),\s*consumes\s+a\s+stack\s+of\s+(?<consume>.+?)\s+if\s+available\.?$", RegexOptions.IgnoreCase);
+        m = Regex.Match(working, @"^When\s+standing\s+within\s+the\s+bounds\s+of\s+(?<status>.+?)[,，]?\s*consumes\s+a\s+stack\s+of\s+(?<consume>.+?)\s+if\s+available\.?$", RegexOptions.IgnoreCase);
         if (m.Success)
         {
             return $"站在 {CleanStatusName(m.Groups["status"].Value)} 范围内时，若有 {CleanStatusName(m.Groups["consume"].Value)} 层数，则消耗1层。";
@@ -821,7 +831,7 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
             return "此技能不与其他技能共享复唱时间。";
         }
 
-        if (Regex.IsMatch(working, @"^Upon\s+execution,\s*the\s+recast\s+timer\s+for\s+this\s+action\s+will\s+be\s+applied\s+to\s+all\s+other\s+weaponskills\s+and\s+magic\s+actions\.?$", RegexOptions.IgnoreCase))
+        if (Regex.IsMatch(working, @"^Upon\s+execution,?\s*the\s+recast\s+timer\s+for\s+this\s+action\s+will\s+be\s+applied\s+to\s+all\s+other\s+weaponskills\s+and\s+magic\s+actions\.?$", RegexOptions.IgnoreCase))
         {
             return "发动后，此技能的复唱时间会应用于所有其他战技与魔法技能。";
         }
@@ -853,7 +863,7 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
             return "对目标及其周围敌人";
         }
 
-        if (Regex.IsMatch(clean, @"^to\s+all\s+nearby\s+enemies$", RegexOptions.IgnoreCase))
+        if (Regex.IsMatch(clean, @"^to\s+(?:all\s+nearby\s+enemies|nearby\s+enemies)$", RegexOptions.IgnoreCase))
         {
             return "对周围所有敌人";
         }
@@ -906,6 +916,17 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
         }
 
         var result = CleanupDescriptionControlMarkers(text);
+        result = Regex.Replace(result, @"\bRestores\s+HP\s+of\s+all\s+party\s+members\s+within\s+(?<range>\d+(?:\.\d+)?)\s+yalms?\s+of\s+target(?:\s+Cure)?(?:\s+Potency\s*:?\s*(?<potency>\d{1,3}(?:,\d{3})*|\d+))?\b", m =>
+        {
+            var range = m.Groups["range"].Value;
+            var potency = m.Groups["potency"].Value;
+            return string.IsNullOrWhiteSpace(potency)
+                ? $"恢复目标周围{range}米内所有队员的HP"
+                : $"恢复目标周围{range}米内所有队员的HP，恢复力为{potency}";
+        }, RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\bWhen\s+standing\s+within\s+the\s+bounds\s+of\s+(?<status>.+?)[,，]?\s*consumes\s+a\s+stack\s+of\s+(?<consume>.+?)\s+if\s+available\b", m =>
+            $"站在 {CleanStatusName(m.Groups["status"].Value)} 范围内时，若有 {CleanStatusName(m.Groups["consume"].Value)} 层数，则消耗1层", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\bUpon\s+execution,?\s*the\s+recast\s+timer\s+for\s+this\s+action\s+will\s+be\s+applied\s+to\s+all\s+other\s+weaponskills\s+and\s+magic\s+actions\b", "发动后，此技能的复唱时间会应用于所有其他战技与魔法技能", RegexOptions.IgnoreCase);
         result = Regex.Replace(result, @"\bcan\s+be\s+cast\s+immediately\s+and\s+its\s+recast\s+timer\s+is\s+reduced\b", "可立即发动，且复唱时间缩短", RegexOptions.IgnoreCase);
         result = Regex.Replace(result, @"\band\s+its\s+recast\s+timer\s+is\s+reduced\b", "且复唱时间缩短", RegexOptions.IgnoreCase);
         result = Regex.Replace(result, @"\bMaximum\s+Stacks\b", "最大层数", RegexOptions.IgnoreCase);
