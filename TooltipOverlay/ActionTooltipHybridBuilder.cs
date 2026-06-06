@@ -199,10 +199,12 @@ internal static class ActionTooltipHybridBuilder
         }
 
         var clean = text.Replace("\r\n", "\n").Replace('\r', '\n');
-        clean = Regex.Replace(clean, @"(?<=\.)\s+(?=(Deals|Delivers|Restores|Grants|Additional Effect|Combo Bonus|Duration|Can only|This action|Upon execution|When standing|Consumes|Increases|Reduces|Extends)\b)", "\n", RegexOptions.IgnoreCase);
-        clean = Regex.Replace(clean, @"\b(Additional Effect|Combo Bonus|Duration|Can only|This action|Upon execution|When standing|Consumes|Range|Radius|Cast|Recast|MP Cost|Cost|Potency):", "\n$1:", RegexOptions.IgnoreCase);
+        clean = Regex.Replace(clean, @"(?<=\.)\s+(?=(Deals|Delivers|Restores|Grants|Additional Effect|Combo Bonus|Duration|Maximum Stacks|Can only|Cannot|This action|Upon execution|When standing|When\s+.+?\s+is\s+active|Consumes|Increases|Reduces|Extends|For the first enemy)\b)", "\n", RegexOptions.IgnoreCase);
+        clean = Regex.Replace(clean, @"\b(Additional Effect|Combo Bonus|Duration|Maximum Stacks|Can only|Cannot|This action|Upon execution|When standing|Consumes|Range|Radius|Cast|Recast|MP Cost|Cost|Potency):", "\n$1:", RegexOptions.IgnoreCase);
         clean = Regex.Replace(clean, @"\b(Weaponskill|Ability|Spell|Trait)\s*\[(\d+)\]", "\n$1 [$2]", RegexOptions.IgnoreCase);
         clean = Regex.Replace(clean, @"\b(Weaponskill|Ability|Spell|Trait)\b", "\n$1", RegexOptions.IgnoreCase);
+        clean = Regex.Replace(clean, @"(Duration\s*:\s*\d+(?:\.\d+)?\s*s)\s+(?=(Can\s+only|Cannot|This\s+action|Upon\s+execution|When\s+|Consumes)\b)", "$1\n", RegexOptions.IgnoreCase);
+        clean = Regex.Replace(clean, @"\s+(?=(?:Cannot\s+be\s+executed|Can\s+only\s+be\s+executed|This\s+action|Upon\s+execution|When\s+[^.]{1,90}?\s+is\s+active|When\s+standing|Consumes)\b)", "\n", RegexOptions.IgnoreCase);
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var raw in clean.Split('\n'))
@@ -250,7 +252,7 @@ internal static class ActionTooltipHybridBuilder
             return false;
         }
 
-        if (Regex.IsMatch(line, @"\b(Deals|Delivers|Restores|Grants|Additional Effect|Combo Bonus|Duration|Can only|This action|Upon execution|When standing|Consumes|Increases|Reduces|Extends|potency|effect|recast timer|weaponskills|magic actions)\b", RegexOptions.IgnoreCase))
+        if (Regex.IsMatch(line, @"\b(Deals|Delivers|Restores|Grants|Additional Effect|Combo Bonus|Duration|Can only|This action|Upon execution|When standing|Consumes|Increases|Reduces|Extends|potency|effect|recast timer|weaponskills|magic actions|Maximum Stacks|Cannot be executed|When .+ is active)\b", RegexOptions.IgnoreCase))
         {
             return true;
         }

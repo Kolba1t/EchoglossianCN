@@ -697,6 +697,59 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
         var working = original;
         working = Regex.Replace(working, @"^Description\s*:\s*", string.Empty, RegexOptions.IgnoreCase).Trim();
 
+        // Common resolved native tooltip patterns with targets/tails. Handle these before
+        // the simpler one-line patterns so skills like Rainbow Drip do not fall through
+        // into partial word replacement.
+        var damagePotencyThenTarget = Regex.Match(working, @"^Deals\s+(?<element>[A-Za-z]+)\s+damage\s+with\s+a\s+potency\s+of\s+(?<potency>\d{1,3}(?:,\d{3})*|\d+)\s+(?<target>to\s+.+?)(?<tail>\s+for\s+the\s+first\s+enemy.*)?\.?$", RegexOptions.IgnoreCase);
+        if (damagePotencyThenTarget.Success)
+        {
+            var element = LocalizeElement(damagePotencyThenTarget.Groups["element"].Value);
+            var target = LocalizeTargetPhrase(damagePotencyThenTarget.Groups["target"].Value);
+            var potency = damagePotencyThenTarget.Groups["potency"].Value;
+            var tail = LocalizeDamageTail(damagePotencyThenTarget.Groups["tail"].Value, potency);
+            var potencyText = tail.StartsWith("首个", StringComparison.Ordinal) ? tail : $"威力为{potency}{tail}";
+            return string.IsNullOrWhiteSpace(target)
+                ? $"造成{element}属性伤害，{potencyText}"
+                : $"{target}造成{element}属性伤害，{potencyText}";
+        }
+
+        var genericDamage = Regex.Match(working, @"^Deals\s+(?<element>[A-Za-z]+)\s+damage(?:\s+(?<target>to\s+.+?))?,?\s*with\s+a\s+potency\s+of\s+(?<potency>\d{1,3}(?:,\d{3})*|\d+)(?<tail>.*?)\.?$", RegexOptions.IgnoreCase);
+        if (genericDamage.Success)
+        {
+            var element = LocalizeElement(genericDamage.Groups["element"].Value);
+            var target = LocalizeTargetPhrase(genericDamage.Groups["target"].Value);
+            var potency = genericDamage.Groups["potency"].Value;
+            var tail = LocalizeDamageTail(genericDamage.Groups["tail"].Value, potency);
+            var potencyText = tail.StartsWith("首个", StringComparison.Ordinal) ? tail : $"威力为{potency}{tail}";
+            return string.IsNullOrWhiteSpace(target)
+                ? $"造成{element}属性伤害，{potencyText}"
+                : $"{target}造成{element}属性伤害，{potencyText}";
+        }
+
+        var missingPotencyDamage = Regex.Match(working, @"^Deals\s+(?<element>[A-Za-z]+)\s+damage\s+with\s+a\s+potency\s+of\s*\.?$", RegexOptions.IgnoreCase);
+        if (missingPotencyDamage.Success)
+        {
+            return $"造成{LocalizeElement(missingPotencyDamage.Groups["element"].Value)}属性伤害。";
+        }
+
+        var maxStacks = Regex.Match(working, @"^Maximum\s+Stacks\s*:\s*(?<stacks>\d+)\.?$", RegexOptions.IgnoreCase);
+        if (maxStacks.Success)
+        {
+            return $"最大层数：{maxStacks.Groups["stacks"].Value}。";
+        }
+
+        var activeCondition = Regex.Match(working, @"^When\s+(?<status>.+?)\s+is\s+active,\s*(?<effect>.+?)\.?$", RegexOptions.IgnoreCase);
+        if (activeCondition.Success)
+        {
+            return $"当 {CleanStatusName(activeCondition.Groups["status"].Value)} 激活时，{LocalizeKnownDescriptionFragments(activeCondition.Groups["effect"].Value)}。";
+        }
+
+        var cannotExecuted = Regex.Match(working, @"^Cannot\s+be\s+executed\s+while\s+under\s+the\s+effect\s+of\s+(?<status>.+?)\.?$", RegexOptions.IgnoreCase);
+        if (cannotExecuted.Success)
+        {
+            return $"无法在 {CleanStatusName(cannotExecuted.Groups["status"].Value)} 效果期间发动。";
+        }
+
         // Very common FFXIV action-tooltip sentence patterns. This is intentionally a
         // conservative fallback: it only rewrites shapes we understand and keeps unknown
         // status/proper-noun names visible instead of guessing.
@@ -706,10 +759,16 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
             return $"造成{LocalizeElement(m.Groups["element"].Value)}属性伤害，威力为{m.Groups["potency"].Value}。";
         }
 
-        m = Regex.Match(working, @"^Delivers\s+an\s+attack\s+with\s+a\s+potency\s+of\s+(?<potency>\d+(?:\.\d+)?)\.?$", RegexOptions.IgnoreCase);
+        m = Regex.Match(working, @"^Delivers\s+an\s+attack\s+with\s+a\s+potency\s+of\s+(?<potency>\d{1,3}(?:,\d{3})*|\d+(?:\.\d+)?)(?:\s+(?<target>to\s+.+?))?(?<tail>.*?)\.?$", RegexOptions.IgnoreCase);
         if (m.Success)
         {
-            return $"发动攻击，威力为{m.Groups["potency"].Value}。";
+            var target = LocalizeTargetPhrase(m.Groups["target"].Value);
+            var potency = m.Groups["potency"].Value;
+            var tail = LocalizeDamageTail(m.Groups["tail"].Value, potency);
+            var potencyText = tail.StartsWith("首个", StringComparison.Ordinal) ? tail : $"威力为{potency}{tail}";
+            return string.IsNullOrWhiteSpace(target)
+                ? $"发动攻击，{potencyText}"
+                : $"{target}发动攻击，{potencyText}";
         }
 
         m = Regex.Match(working, @"^Additional\s+Effect\s*:\s*Grants\s+(?<status>.+?)\.?$", RegexOptions.IgnoreCase);
@@ -770,6 +829,75 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
         return LocalizeKnownDescriptionFragments(working);
     }
 
+
+    private static string LocalizeTargetPhrase(string target)
+    {
+        if (string.IsNullOrWhiteSpace(target))
+        {
+            return string.Empty;
+        }
+
+        var clean = CleanupDescriptionControlMarkers(target).Trim().Trim(',', '.');
+        if (Regex.IsMatch(clean, @"^to\s+all\s+enemies\s+in\s+a\s+straight\s+line\s+before\s+you$", RegexOptions.IgnoreCase))
+        {
+            return "对自身前方直线范围内的所有敌人";
+        }
+
+        if (Regex.IsMatch(clean, @"^to\s+all\s+enemies\s+in\s+a\s+cone\s+before\s+you$", RegexOptions.IgnoreCase))
+        {
+            return "对自身前方扇形范围内的所有敌人";
+        }
+
+        if (Regex.IsMatch(clean, @"^to\s+target\s+and\s+all\s+enemies\s+nearby\s+it$", RegexOptions.IgnoreCase))
+        {
+            return "对目标及其周围敌人";
+        }
+
+        if (Regex.IsMatch(clean, @"^to\s+all\s+nearby\s+enemies$", RegexOptions.IgnoreCase))
+        {
+            return "对周围所有敌人";
+        }
+
+        if (Regex.IsMatch(clean, @"^to\s+all\s+enemies$", RegexOptions.IgnoreCase))
+        {
+            return "对所有敌人";
+        }
+
+        if (Regex.IsMatch(clean, @"^to\s+target$", RegexOptions.IgnoreCase))
+        {
+            return "对目标";
+        }
+
+        return clean;
+    }
+
+    private static string LocalizeDamageTail(string tail, string potency)
+    {
+        var clean = CleanupDescriptionControlMarkers(tail).Trim().Trim('.', ',');
+        if (string.IsNullOrWhiteSpace(clean))
+        {
+            return "。";
+        }
+
+        var firstEnemy = Regex.Match(clean, @"^for\s+the\s+first\s+enemy,?\s+and\s+(?<percent>\d+(?:\.\d+)?)%\s+less\s+for\s+all\s+remaining\s+enemies$", RegexOptions.IgnoreCase);
+        if (firstEnemy.Success)
+        {
+            return $"首个目标威力为{potency}，对其余目标威力降低{firstEnemy.Groups["percent"].Value}%。";
+        }
+
+        if (Regex.IsMatch(clean, @"^to\s+", RegexOptions.IgnoreCase))
+        {
+            var target = LocalizeTargetPhrase(clean);
+            if (!string.IsNullOrWhiteSpace(target) && !string.Equals(target, clean, StringComparison.OrdinalIgnoreCase))
+            {
+                return $"，目标为{target}。";
+            }
+        }
+
+        var remaining = LocalizeKnownDescriptionFragments(clean);
+        return $"。{remaining}";
+    }
+
     private static string LocalizeKnownDescriptionFragments(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -778,6 +906,17 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
         }
 
         var result = CleanupDescriptionControlMarkers(text);
+        result = Regex.Replace(result, @"\bcan\s+be\s+cast\s+immediately\s+and\s+its\s+recast\s+timer\s+is\s+reduced\b", "可立即发动，且复唱时间缩短", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\band\s+its\s+recast\s+timer\s+is\s+reduced\b", "且复唱时间缩短", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\bMaximum\s+Stacks\b", "最大层数", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\bunaspected\b", "无属性", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\ball\s+enemies\s+in\s+a\s+straight\s+line\s+before\s+you\b", "自身前方直线范围内的所有敌人", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\ball\s+enemies\s+in\s+a\s+cone\s+before\s+you\b", "自身前方扇形范围内的所有敌人", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\ball\s+nearby\s+enemies\b", "周围所有敌人", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\bfor\s+the\s+first\s+enemy,?\s+and\s+(?<percent>\d+(?:\.\d+)?)%\s+less\s+for\s+all\s+remaining\s+enemies\b", "首个目标，且对其余目标威力降低${percent}%", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\bDelivers\s+an\s+attack\s+with\s+a\s+potency\s+of\s+(?<potency>\d{1,3}(?:,\d{3})*|\d+(?:\.\d+)?)\s+to\s+all\s+nearby\s+enemies\b", "对周围所有敌人发动攻击，威力为${potency}", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\bDelivers\s+an\s+attack\s+with\s+a\s+potency\s+of\s+(?<potency>\d{1,3}(?:,\d{3})*|\d+(?:\.\d+)?)\s+to\s+all\s+enemies\s+in\s+a\s+cone\s+before\s+you\b", "对自身前方扇形范围内的所有敌人发动攻击，威力为${potency}", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\bDelivers\s+an\s+attack\s+with\s+a\s+potency\s+of\s+(?<potency>\d{1,3}(?:,\d{3})*|\d+(?:\.\d+)?)\s+to\s+all\s+enemies\s+in\s+a\s+straight\s+line\s+before\s+you\b", "对自身前方直线范围内的所有敌人发动攻击，威力为${potency}", RegexOptions.IgnoreCase);
         result = Regex.Replace(result, @"\bDeals\b", "造成", RegexOptions.IgnoreCase);
         result = Regex.Replace(result, @"\bDelivers\b", "发动", RegexOptions.IgnoreCase);
         result = Regex.Replace(result, @"\bdamage\b", "伤害", RegexOptions.IgnoreCase);
@@ -923,8 +1062,10 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
 
         var clean = text.Replace("\r\n", "\n").Replace('\r', '\n');
         clean = Regex.Replace(clean, @"\b(Description|Action data)\s*:\s*", string.Empty, RegexOptions.IgnoreCase);
-        clean = Regex.Replace(clean, @"\b(Additional Effect|Combo Bonus|Duration)\s*:\s*", "\n$1: ", RegexOptions.IgnoreCase);
-        clean = Regex.Replace(clean, @"(?<=\.)\s+(?=(Additional Effect|Combo Bonus|Duration|Can only|This action|Upon execution|When standing|Consumes|Grants|Deals|Delivers|Restores)\b)", "\n", RegexOptions.IgnoreCase);
+        clean = Regex.Replace(clean, @"\b(Additional Effect|Combo Bonus|Duration|Maximum Stacks)\s*:\s*", "\n$1: ", RegexOptions.IgnoreCase);
+        clean = Regex.Replace(clean, @"(?<=\.)\s+(?=(Additional Effect|Combo Bonus|Duration|Maximum Stacks|Can only|Cannot|This action|Upon execution|When standing|When\s+[^.]{1,90}?\s+is\s+active|Consumes|Grants|Deals|Delivers|Restores|For the first enemy|all\s+enemies\s+in\s+a\s+(?:straight\s+line|cone)\s+before\s+you)\b)", "\n", RegexOptions.IgnoreCase);
+        clean = Regex.Replace(clean, @"(Duration\s*:\s*\d+(?:\.\d+)?\s*s)\s+(?=(Can\s+only|Cannot|This\s+action|Upon\s+execution|When\s+|Consumes)\b)", "$1\n", RegexOptions.IgnoreCase);
+        clean = Regex.Replace(clean, @"\s+(?=(?:Cannot\s+be\s+executed|Can\s+only\s+be\s+executed|This\s+action|Upon\s+execution|When\s+[^.]{1,90}?\s+is\s+active|When\s+standing|Consumes)\b)", "\n", RegexOptions.IgnoreCase);
         clean = Regex.Replace(clean, @"[ \t]{2,}", " ");
         clean = Regex.Replace(clean, @"\n{3,}", "\n\n");
         return clean.Trim();
@@ -1017,25 +1158,31 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
                     continue;
                 }
 
+                if (Regex.IsMatch(line, @"^Maximum\s+Stacks\s*:", RegexOptions.IgnoreCase))
+                {
+                    result.AdditionalEffectLines.Add(line);
+                    continue;
+                }
+
                 if (Regex.IsMatch(line, @"^Combo\s+Bonus\s*:", RegexOptions.IgnoreCase))
                 {
                     result.ComboBonusLines.Add(line);
                     continue;
                 }
 
-                if (Regex.IsMatch(line, @"^Can\s+only\s+be\s+executed\b|^Cannot\s+be\s+executed\b|^Cannot\s+use\b", RegexOptions.IgnoreCase))
+                if (Regex.IsMatch(line, @"^Can\s+only\s+be\s+executed\b|^Cannot\s+be\s+executed\b|^Cannot\s+use\b|^Cannot\s+be\s+assigned\b", RegexOptions.IgnoreCase))
                 {
                     result.RequirementLines.Add(line);
                     continue;
                 }
 
-                if (Regex.IsMatch(line, @"^This\s+action\b|^Upon\s+execution\b|^When\s+standing\b|^Consumes\b|^Shares\s+a\s+recast\s+timer\b|^Does\s+not\s+share\b", RegexOptions.IgnoreCase))
+                if (Regex.IsMatch(line, @"^This\s+action\b|^Upon\s+execution\b|^When\s+standing\b|^When\s+.+?\s+is\s+active\b|^and\s+its\s+recast\s+timer\b|^Consumes\b|^Shares\s+a\s+recast\s+timer\b|^Does\s+not\s+share\b", RegexOptions.IgnoreCase))
                 {
                     result.SpecialNoteLines.Add(line);
                     continue;
                 }
 
-                if (Regex.IsMatch(line, @"^Deals\b|^Delivers\b|^Restores\b|^Extends\b|^Increases\b|^Reduces\b", RegexOptions.IgnoreCase))
+                if (Regex.IsMatch(line, @"^Deals\b|^Delivers\b|^Restores\b|^Extends\b|^Increases\b|^Reduces\b|^For\s+the\s+first\s+enemy\b", RegexOptions.IgnoreCase))
                 {
                     result.MainLines.Add(line);
                     continue;
