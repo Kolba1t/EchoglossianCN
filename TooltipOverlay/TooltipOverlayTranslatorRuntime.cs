@@ -1918,12 +1918,12 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
 
         if (strong)
         {
-            ImGui.TextWrapped(value);
+            ImGui.TextWrapped(TooltipOverlayChinesePostProcessor.Process(value));
             ImGui.Separator();
         }
         else
         {
-            ImGui.TextWrapped(value);
+            ImGui.TextWrapped(TooltipOverlayChinesePostProcessor.Process(value));
         }
     }
 
@@ -1987,3 +1987,4 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
         }
     }
 }
+
