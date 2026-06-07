@@ -1,3 +1,4 @@
+
 using System.Text.RegularExpressions;
 
 namespace Echoglossian.TooltipOverlay;
@@ -19,7 +20,7 @@ internal static class TooltipOverlayChinesePostProcessor
         // Clean any remaining marker artifacts from native tooltip capture.
         s = Regex.Replace(s, @"\b[HI](?:\s+[HI]){1,}\b", " ");
         s = Regex.Replace(s, @"\s{2,}", " ");
-        s = Regex.Replace(s, @"\s+([。,.，:：])", "$1");
+        s = Regex.Replace(s, @"\s+([。,.，:：])", "`$1");
 
         // Common Starry Muse / shared recast notes.
         s = Rx(s, @"When\s+standing\s+within\s+the\s+bounds\s+of\s+Starry\s+Muse,?\s*consumes\s+a\s+stack\s+of\s+Hyperphantasia\s+if\s+available\.?", "站在 Starry Muse 范围内时，若有 Hyperphantasia 层数，则消耗 1 层。");
@@ -38,11 +39,11 @@ internal static class TooltipOverlayChinesePostProcessor
         s = Rx(s, @"Cannot\s+be\s+executed\s+while\s+under\s+the\s+effect\s+of\s+Subtractive\s+Palette\.?", "无法在 Subtractive Palette 效果期间发动。");
 
         // General labels/fragments that may slip through from action descriptions.
-        s = Rx(s, @"\bAdditional\s+Effect\s*:\s*Grants\s+([A-Za-z][A-Za-z '\-]+?)\.?(?=\r?\n|$)", "追加效果：获得 $1。");
+        s = Rx(s, @"\bAdditional\s+Effect\s*:\s*Grants\s+([A-Za-z][A-Za-z '\-]+?)\.?(?=\r?\n|$)", "追加效果：获得 `$1。");
         s = Rx(s, @"\bGrants\s+Aetherhues\b", "获得 Aetherhues");
         s = Rx(s, @"\bGrants\s+White\s+Paint\b", "获得 White Paint");
-        s = Rx(s, @"\bDuration\s*:\s*(\d+(?:\.\d+)?)s\b", "持续时间：$1秒");
-        s = Rx(s, @"\bMaximum\s+Stacks\s*:\s*(\d+)\b", "最大层数：$1");
+        s = Rx(s, @"\bDuration\s*:\s*(\d+(?:\.\d+)?)s\b", "持续时间：`$1秒");
+        s = Rx(s, @"\bMaximum\s+Stacks\s*:\s*(\d+)\b", "最大层数：`$1");
 
         // Light cleanup after replacements.
         s = Regex.Replace(s, @"\s{2,}", " ");

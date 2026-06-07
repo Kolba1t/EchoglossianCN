@@ -33,6 +33,7 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
     private bool started;
     private string? pendingCacheKey;
     private Vector2 lastOverlaySize = new(420, 260);
+    private string lastTranslationDiagnostics = string.Empty;
 
     public TooltipOverlayTranslatorRuntime(
         Config config,
@@ -1642,11 +1643,6 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
             .Where(m => m.Name == "TranslateAsync")
             .ToArray();
 
-        // Echoglossian's runtime handlers call TranslationService.TranslateAsync(text,
-        // ClientLanguage.Humanize(), LangDict[LanguageInt].Code). Prefer that exact
-        // three-argument shape. v0.1.3 selected the overload with the most parameters,
-        // which can route through an overload not meant for normal translations and cache
-        // English output as if it were translated.
         var method = methods.FirstOrDefault(m =>
         {
             var p = m.GetParameters();
@@ -1664,6 +1660,77 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
             throw new MissingMethodException(translator.GetType().FullName, "TranslateAsync");
         }
 
+        var firstResult = await this.InvokeTranslateAsync(
+            translator,
+            method,
+            text,
+            sourceLanguage,
+            targetLanguage,
+            context,
+            cancellationToken).ConfigureAwait(false);
+
+        var firstLooksUntranslated = LooksUntranslated(text, firstResult, targetLanguage);
+        this.SetLastTranslationDiagnostics(
+            translator,
+            method,
+            context,
+            sourceLanguage,
+            targetLanguage,
+            text,
+            firstResult,
+            "primary",
+            firstLooksUntranslated);
+
+        // ChatGPT/OpenAI backends can sometimes answer in English or echo the input when the
+        // target is passed as a short code such as zh-CN. For tooltip overlay text, retry once
+        // with an explicit instruction prompt and a human-readable target before accepting the
+        // English result. This does not affect non-tooltip Echoglossian surfaces.
+        if (IsChineseTarget(targetLanguage)
+            && firstLooksUntranslated
+            && context.Contains("TooltipOverlay", StringComparison.OrdinalIgnoreCase)
+            && !LooksLikeStrictPrompt(text))
+        {
+            var prompt = BuildStrictChineseTranslationPrompt(text);
+            var retryResult = await this.InvokeTranslateAsync(
+                translator,
+                method,
+                prompt,
+                "English",
+                "Simplified Chinese",
+                context + ".StrictChineseRetry",
+                cancellationToken).ConfigureAwait(false);
+
+            retryResult = CleanTranslatedOutput(StripStrictDescriptionPromptEcho(retryResult));
+            var retryLooksUntranslated = LooksUntranslated(text, retryResult, targetLanguage);
+            this.SetLastTranslationDiagnostics(
+                translator,
+                method,
+                context + ".StrictChineseRetry",
+                "English",
+                "Simplified Chinese",
+                text,
+                retryResult,
+                "retry",
+                retryLooksUntranslated);
+
+            if (!retryLooksUntranslated && !string.IsNullOrWhiteSpace(retryResult))
+            {
+                return retryResult;
+            }
+        }
+
+        return firstResult;
+    }
+
+    private async Task<string> InvokeTranslateAsync(
+        object translator,
+        System.Reflection.MethodInfo method,
+        string text,
+        string sourceLanguage,
+        string targetLanguage,
+        string context,
+        CancellationToken cancellationToken)
+    {
         var parameters = method.GetParameters();
         object?[] args;
         if (parameters.Length == 3 && parameters.Count(x => x.ParameterType == typeof(string)) >= 3)
@@ -1723,6 +1790,57 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
 
         var result = method.Invoke(translator, args);
         return await UnwrapTranslationResultAsync(result).ConfigureAwait(false);
+    }
+
+    private void SetLastTranslationDiagnostics(
+        object translator,
+        System.Reflection.MethodInfo method,
+        string context,
+        string sourceLanguage,
+        string targetLanguage,
+        string input,
+        string output,
+        string stage,
+        bool looksUntranslated)
+    {
+        var inputPreview = PreviewForDiagnostics(input);
+        var outputPreview = PreviewForDiagnostics(output);
+        this.lastTranslationDiagnostics = string.Join("\n", new[]
+        {
+            $"stage={stage} context={context}",
+            $"translator={translator.GetType().Name} method={method.Name}/{method.GetParameters().Length}",
+            $"source={sourceLanguage} target={targetLanguage}",
+            $"inputChars={input?.Length ?? 0} outputChars={output?.Length ?? 0}",
+            $"outputHasCJK={(ContainsCjk(output) ? "yes" : "no")} looksUntranslated={(looksUntranslated ? "yes" : "no")}",
+            $"input={inputPreview}",
+            $"output={outputPreview}",
+        });
+
+        this.log.Debug($"[CN Tooltip Overlay Translation] {this.lastTranslationDiagnostics.Replace("\n", " | ")}");
+    }
+
+    private static string PreviewForDiagnostics(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "(empty)";
+        }
+
+        var clean = value.Replace("\r\n", " ").Replace('\r', ' ').Replace('\n', ' ');
+        clean = Regex.Replace(clean, @"\s+", " ").Trim();
+        return clean.Length <= 180 ? clean : clean[..180] + "...";
+    }
+
+    private static bool LooksLikeStrictPrompt(string text)
+        => text.Contains("Translate the following Final Fantasy XIV", StringComparison.OrdinalIgnoreCase);
+
+    private static string BuildStrictChineseTranslationPrompt(string text)
+    {
+        var clean = text.Replace("\r\n", "\n").Replace('\r', '\n').Trim();
+        return "Translate the following Final Fantasy XIV game text into Simplified Chinese.\n" +
+               "Return only the Chinese translation. Do not explain. Do not answer in English.\n" +
+               "Preserve all numbers, potency values, percentages, cooldowns, yalms, line breaks, and proper nouns if uncertain.\n" +
+               "Text:\n<<<\n" + clean + "\n>>>";
     }
 
     private static async Task<string> UnwrapTranslationResultAsync(object? result)
@@ -1906,11 +2024,24 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
         {
             ImGui.TextDisabled(providerDebug);
         }
+
+        if (!string.IsNullOrWhiteSpace(this.lastTranslationDiagnostics))
+        {
+            ImGui.TextDisabled("Translation diagnostics:");
+            foreach (var line in this.lastTranslationDiagnostics.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
+            {
+                if (!string.IsNullOrWhiteSpace(line))
+                {
+                    ImGui.TextDisabled(line.Trim());
+                }
+            }
+        }
     }
 
     private void DrawWrapped(string text, string fallback, bool strong)
     {
         var value = string.IsNullOrWhiteSpace(text) ? fallback : text;
+        value = TooltipOverlayChinesePostProcessor.Process(value);
         if (string.IsNullOrWhiteSpace(value))
         {
             return;
@@ -1918,12 +2049,12 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
 
         if (strong)
         {
-            ImGui.TextWrapped(TooltipOverlayChinesePostProcessor.Process(value));
+            ImGui.TextWrapped(value);
             ImGui.Separator();
         }
         else
         {
-            ImGui.TextWrapped(TooltipOverlayChinesePostProcessor.Process(value));
+            ImGui.TextWrapped(value);
         }
     }
 
@@ -1987,4 +2118,3 @@ internal sealed class TooltipOverlayTranslatorRuntime : IDisposable
         }
     }
 }
-
